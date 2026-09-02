@@ -25,6 +25,41 @@ fi
 
 C_SOURCES=(
     "$HERE/src/msLog.c"
+    "$HERE/src/msMidi.c"
+    "$HERE/src/msClock.c"
+    "$HERE/src/msStats.c"
+    "$HERE/src/msDetect.c"
+    "$HERE/src/msProbe.c"
+    "$HERE/vst3/msStatus.c"
+    "$HERE/vst3/msDraw.c"
+    "$HERE/vst3/msAppStubs.c"
+
+    # SynthLib, and only the parts a plug-in panel needs - the same manual list GenBridge keeps, and
+    # manual for the same reason: nothing here is a synchronised folder, so a new SynthLib file has
+    # to be added deliberately.
+    "$HERE/SynthLib/src/utilsGraphics.c"
+    "$HERE/SynthLib/src/renderBackend.c"
+    "$HERE/SynthLib/src/renderBackendGL.c"
+    "$HERE/SynthLib/src/geometry.c"
+    "$HERE/SynthLib/src/utils.c"
+    "$HERE/SynthLib/src/synthlibHost.c"
+    "$HERE/SynthLib/src/synthlibVersion.c"
+    "$HERE/SynthLib/src/clickRegion.c"
+    "$HERE/SynthLib/src/inputState.c"
+    "$HERE/SynthLib/src/contextMenu.c"
+)
+
+# Objective-C. Plain, not Objective-C++: the drawing surface needs the runtime but no C++, and
+# keeping it separate confines C++ to the one file that genuinely has to speak it.
+OBJC_SOURCES=(
+    "$HERE/vst3/msView.m"
+    "$HERE/SynthLib/src/renderBackendMetal.m"
+)
+
+# Objective-C++ for the editor: it builds an AppKit view and hands it to the host, and IPlugView is
+# a C++ interface, so this one file has to speak both.
+OBJCPP_SOURCES=(
+    "$HERE/vst3/msEditor.mm"
 )
 
 CPP_SOURCES=(
@@ -32,12 +67,33 @@ CPP_SOURCES=(
     "$SDK/pluginterfaces/base/funknown.cpp"
     "$SDK/pluginterfaces/base/coreiids.cpp"
     "$SDK/public.sdk/source/vst/vstinitiids.cpp"
+
+    # IPlugView's own IID lives here rather than in coreiids.cpp - the editor needs it, a plug-in
+    # without one does not.
+    "$SDK/public.sdk/source/common/commoniids.cpp"
 )
 
-INCLUDES=(-I"$HERE/src" -I"$HERE/vst3" -I"$SDK")
+# glfw is here for its HEADERS ONLY - SynthLib's key and mouse constants come from them.
+INCLUDES=(-I"$HERE/src" -I"$HERE/vst3" -I"$HERE/SynthLib/src" -I"$SDK"
+          -I"$HERE/SynthLib/ThirdParty/glfw/include"
+          -I"$HERE/SynthLib/ThirdParty/freetype/include")
+
+# glfw is here for its HEADERS ONLY - SynthLib's key and mouse constants come from them, which is
+# enum leakage rather than a dependency, so the library itself is never built or linked. freetype
+# genuinely is one: the panel renders text through it.
+FREETYPE_LIB="$HERE/SynthLib/ThirdParty/freetype/build/libfreetype.a"
+
+if [[ ! -f "$FREETYPE_LIB" ]]; then
+    print -u2 "error: freetype not built at $FREETYPE_LIB"
+    print -u2 "       see the build notes in G2-Edit/Docs/Third Party build notes.txt"
+    exit 1
+fi
 
 MST_VERSION="${MST_VERSION:-0.1.0}"
-PLUGIN_DEFS=(-DMST_VERSION_STRING="\"$MST_VERSION\"")
+# G2_VST3_BUILD is SynthLib's "this is a plug-in, there is no GLFW" switch, and it is what compiles
+# the GLFW calls out of renderBackendGL.c's gl_present(). The name is G2-specific for historical
+# reasons; all four projects set it in their plug-in builds.
+PLUGIN_DEFS=(-DG2_VST3_BUILD=1 -DMST_VERSION_STRING="\"$MST_VERSION\"")
 
 rm -rf "$OUT"
 mkdir -p "$OUT/Contents/MacOS"
@@ -58,6 +114,22 @@ for ARCH in arm64 x86_64; do
         OBJS+=("$OBJ")
     done
 
+    for SRC in "${OBJC_SOURCES[@]}"; do
+        OBJ="$WORK/$(basename ${SRC%.m})-objc-$ARCH.o"
+        clang -c -arch "$ARCH" -mmacosx-version-min=$DEPLOYMENT_TARGET \
+            -std=gnu11 -O2 -Wall -Wextra -fobjc-arc "${PLUGIN_DEFS[@]}" \
+            "${INCLUDES[@]}" -o "$OBJ" "$SRC"
+        OBJS+=("$OBJ")
+    done
+
+    for SRC in "${OBJCPP_SOURCES[@]}"; do
+        OBJ="$WORK/$(basename ${SRC%.mm})-objcpp-$ARCH.o"
+        clang++ -c -arch "$ARCH" -mmacosx-version-min=$DEPLOYMENT_TARGET \
+            -std=gnu++17 -O2 -Wall -Wextra -fobjc-arc "${PLUGIN_DEFS[@]}" \
+            "${INCLUDES[@]}" -o "$OBJ" "$SRC"
+        OBJS+=("$OBJ")
+    done
+
     for SRC in "${CPP_SOURCES[@]}"; do
         OBJ="$WORK/$(basename ${SRC%.cpp})-$ARCH.o"
         clang++ -c -arch "$ARCH" -mmacosx-version-min=$DEPLOYMENT_TARGET \
@@ -67,8 +139,9 @@ for ARCH in arm64 x86_64; do
     done
 
     clang++ -arch "$ARCH" -mmacosx-version-min=$DEPLOYMENT_TARGET \
-        -dynamiclib -o "$WORK/MidiSyncTool-$ARCH" "${OBJS[@]}" \
-        -framework CoreFoundation -framework CoreAudio
+        -dynamiclib -o "$WORK/MidiSyncTool-$ARCH" "${OBJS[@]}" "$FREETYPE_LIB" \
+        -framework CoreFoundation -framework CoreAudio -framework CoreMIDI \
+        -framework Cocoa -framework Metal -framework QuartzCore -framework OpenGL
 done
 
 lipo -create -output "$BIN" "$WORK/MidiSyncTool-arm64" "$WORK/MidiSyncTool-x86_64"

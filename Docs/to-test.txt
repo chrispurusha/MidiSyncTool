@@ -14,3 +14,27 @@ Confirmed -> delete the line. Check failed -> move it to todo.txt.
   for whether ppq stays continuous across the change or steps.
 - Audio passthrough: the plug-in copies input to output. Confirm a track with it inserted still
   passes audio unchanged, including when the host hands the same buffer for in and out.
+- Clock delivery jitter in LIVE. Settled offline against a real device callback: 0.033 ms RMS, and
+  the 0.92 ms was the usleep harness (findings 2026-09-02). What is still unknown is Live itself,
+  whose block timing is its own. Point the plug-in at IAC in Live (MST_MIDI_DEST) and read the
+  "timing |" lines in /tmp/midisynctool.log.
+- Whether MS_LOOKAHEAD_MS earns its place. The commit-margin telemetry now answers it from inside a
+  host: if "late" stays 0 and the minimum margin never falls far below 10 ms, the lookahead is doing
+  nothing and can go. Offline against the QU-24 the minimum was +10.04 ms with 0 late out of 332.
+- Transport in LIVE. Start/SPP/Continue/Stop are verified against the harness only. What matters in
+  Live is whether starting from a non-zero position produces SPP before Continue, and whether the
+  Tempest lands on the right beat as a result.
+- The 21.94 ms note round trip against a second reference. It is repeatable and the detector is
+  clean, but nothing yet confirms the absolute figure - only that it is consistent. An audio
+  loopback (QU-24 out 29 back to in 15) would pin the constant part of it.
+- THE PANEL'S CONTROLS IN LIVE: the port drop-down, the analyse-channel drop-down and the
+  compensation stepper. Verified offline through --param only; the click path itself has not run in
+  a host. Check too that a saved set reopens on the right port, and that it says "waiting for" when
+  that port is switched off.
+- Drift in LIVE. Offline against the QU-24 it settles at -19 ppm within a couple of ppm; Live's own
+  block timing is its own, and the figure should be checked to be as steady there.
+- THE PANEL IN LIVE. It builds, the controller connects, the slot crosses and createView returns a
+  view - all verified in the harness, none of it in a real host. Insert on a track, open the editor,
+  and check that the figures move and that resizing behaves.
+- Latency compensation against real hardware. Proved only against the harness's synthetic device so
+  far; MST_OFFSET_MS=-21.9 should bring the Tempest onto the beat and has not been tried.

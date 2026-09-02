@@ -4,13 +4,24 @@ set -e
 SDK="${VST3_SDK:-$HOME/Documents/vst3sdk}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+# The C parts are compiled as C - msDevice.c and msRing.c use _Atomic and designated initialisers
+# that a C++ compiler either refuses or means something different by.
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+for SRC in msDevice msRing; do
+    clang -c -O2 -std=gnu11 -Wall -Wextra -I "$HERE/../src" \
+        -o "$WORK/$SRC.o" "$HERE/../src/$SRC.c"
+done
+
 clang++ -O2 -std=gnu++17 -Wall -Wextra \
-    -I "$SDK" \
+    -I "$SDK" -I "$HERE/../src" \
     -o "$HERE/mstDriver" \
     "$HERE/mstDriver.cpp" \
+    "$WORK/msDevice.o" "$WORK/msRing.o" \
     "$SDK/pluginterfaces/base/funknown.cpp" \
     "$SDK/pluginterfaces/base/coreiids.cpp" \
     "$SDK/public.sdk/source/vst/vstinitiids.cpp" \
-    -framework CoreFoundation
+    -framework CoreFoundation -framework CoreMIDI -framework CoreAudio
 
 print "Built: $HERE/mstDriver"

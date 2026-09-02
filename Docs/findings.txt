@@ -4,6 +4,117 @@ Completed work, measurements, and the traps that cost real time.
 One entry per finding, newest first.
 
 
+2026-09-02  CLOCK GENERATES CORRECTLY - AND NEEDS A LOOKAHEAD
+------------------------------------------------------------
+src/msClock.c generating 24 PPQN from the host's ppq, sent through src/msMidi.c with a scheduled
+timestamp, driven offline by tools/mstDriver at 130 BPM with a 1-bar loop.
+
+CORRECT, on the musical side:
+  - 419 ticks in 8 s = 52.4/s, and 130 BPM x 24 PPQN is 52.0 - right rate, right tempo.
+  - The wrap counter increments exactly once per loop, so the correction in ms_clock_process() is
+    firing on Live's snap-to-loop-start pattern rather than being fooled by it.
+  - Tempest appears in the destination list (index 7 here), so the intended first target is
+    reachable without any further work.
+
+NOT YET GOOD ENOUGH, on delivery. Measured through IAC, target 19.2308 ms between ticks:
+                                     mean         RMS        worst
+  raw timestamp test (no plug-in)  -0.0003 ms   0.019 ms   +0.054 ms
+  clock through the plug-in        -0.1307 ms   1.667 ms  -18.050 ms
+
+  The mean is fine, so nothing is drifting. The RMS and that -18 ms worst case are BUNCHING: a tick
+  is currently scheduled for "this block's wall time plus its offset within the block", so if a
+  block is picked up late, some of its ticks are already in the past when they are submitted and
+  CoreMIDI delivers them at once.
+
+  THE FIX WAS NOT A LOOKAHEAD, though that was the first guess and it was wrong. Adding one changed
+  nothing (1.667 -> 1.711 ms RMS), which is what sent the investigation somewhere better: printing
+  WHERE the outliers fell rather than how big they were.
+
+  They landed 96, 96, 96 ticks apart. 96 ticks is exactly one bar of 4/4 at 24 PPQN - so it was the
+  LOOP WRAP every time, and structural rather than noise. The signature was a ~2 ms interval
+  followed by a long one: a DOUBLED TICK. The tick at the loop END and the tick at the loop START
+  are the same musical moment, and a generator that searches for every 1/24 boundary inside each
+  block's musical span emits both.
+
+  Replacing that search with a PHASE ACCUMULATOR fixed it. Carrying the leftover fraction of a tick
+  from block to block cannot revisit a boundary, so it cannot duplicate one, wrap or no wrap:
+
+                              mean         RMS        worst      outlier spacing
+    range search           -0.131 ms   1.711 ms  -18.019 ms      96, 96, 96 (structural)
+    phase accumulator      +0.002 ms   0.922 ms   -2.503 ms      54, 45 (scattered)
+
+  Tick count came out at 519 against the 520 the tempo predicts, so nothing is being dropped either.
+
+  THE LOOKAHEAD IS STILL THERE AND IS STILL UNJUSTIFIED. Swept at 5 / 10 / 30 ms it gave 0.936 /
+  0.891 / 0.901 ms RMS - no effect at all. It is kept at 10 ms because the failure it guards against
+  is real in principle and costs only a known constant, but nothing here has demonstrated it buys
+  anything, and this harness may be incapable of showing it. Revisit against a real host under load.
+
+  THE REMAINING 0.9 ms IS PROBABLY THE HARNESS, NOT THE PLUG-IN. The raw timestamp test, with no
+  plug-in and no block pacing, reached 0.019 ms through the same port. The difference is that
+  mstDriver paces blocks with usleep, so the blockHostTime every tick is placed against is itself
+  jittering. That claim is untested; Live is the place to settle it.
+
+TWO HARNESS BUGS FOUND BY THIS, BOTH MINE, both of which produced numbers that looked like plug-in
+defects:
+  1. --realtime slept one block's length per block. usleep always overshoots, so the harness ran 20%
+     slow (wall +6.4 ms against 5.33), dragging every scheduled tick with it: a +3.27 ms MEAN error
+     that was entirely the harness. Now sleeps until block N is DUE, against an absolute start.
+  2. The clock listener matched source names one way round only. IAC's destination is "IAC Driver
+     Bus 1" and its source is just "Bus 1", so it connected to nothing and reported no measurement -
+     which reads as "the clock never arrived".
+
+Worth keeping in mind for everything that follows: this harness is a sleeping loop pretending to be
+an audio callback, and its own timing is nowhere near a real host's. Delivery figures from it are
+indicative. The number that counts comes from Live.
+
+
+2026-09-02  CALIBRATION RIG - HOW THE TEMPEST IS WIRED
+------------------------------------------------------------
+CT's setup for the first real calibration, recorded before it is needed:
+  - Dave Smith TEMPEST, connected by USB MIDI, appears directly in the CoreMIDI destination list
+    (index 7 in the enumeration above) - no interface in the way.
+  - Its audio returns on QU-24 inputs 15 and 16 (14 and 15 zero-based).
+  - For a latency measurement the plan is a kick on 16ths, so there is a transient on a known grid
+    to correlate against.
+
+THE WIDER POINT, which is a product question and not a technical one: a calibration that requires the
+user to program a pattern, route audio to the right inputs and pick the right MIDI port is a
+calibration most users will get wrong. The tool should walk them through it and CHECK each step -
+"no audio on those inputs", "no transients detected", "the transients are not on a grid" - rather
+than presenting a CALIBRATE button that silently produces a wrong number. Worth designing before the
+measurement code, because it changes what the measurement has to report.
+
+
+2026-09-02  SCHEDULED MIDI IS 220x TIGHTER THAN IMMEDIATE - MEASURED
+------------------------------------------------------------
+tools/midiTimestampTest.c. 200 clock bytes at 20.8333 ms apart (24 PPQN at 120 BPM) down IAC Driver
+Bus 1 and received on its own source, timed on arrival.
+
+                          mean error      RMS        worst
+  SCHEDULED ahead         -0.0003 ms   0.019 ms   +0.054 ms
+  IMMEDIATE (ts 0)        +3.8703 ms   4.157 ms   +6.871 ms
+
+CoreMIDI honours a future timestamp, and honours it well: 19 microseconds RMS with no systematic
+drift. Sending with timestamp 0 from a sleeping loop - the shape of a generator that emits at block
+boundaries instead of scheduling - is 220 times worse on RMS AND carries a 3.9 ms MEAN error,
+because a sleep always overshoots and the error accumulates rather than averaging out.
+
+So the design decision is settled with a number rather than an argument: hand CoreMIDI the future
+time and let the driver place it.
+
+A TRAP ON THE WAY, worth recording because the first result was a lie. The receive callback
+originally recorded the PACKET'S OWN timestamp, which IAC passes through untouched - so it measured
+whether CoreMIDI can copy a number back, and duly reported RMS 0.0000 ms. A perfect result that
+flattered the design and meant nothing. The arrival time has to be read from the wall clock in the
+callback. Any future measurement through a virtual port needs the same care.
+
+CAVEAT: IAC is an in-memory virtual driver. A real DIN interface adds its own jitter, and the wire
+itself is about 320 microseconds per byte at 31250 baud - so the interface will dominate in
+practice. What this establishes is that OUR contribution sits far below anything we would be trying
+to measure in someone else's equipment.
+
+
 2026-09-02  A HOST THAT LIES THE WAY ABLETON LIES
 ------------------------------------------------------------
 tools/mstDriver - a headless VST3 host that hands the plug-in a ProcessContext modelled on the
@@ -122,3 +233,298 @@ STILL UNKNOWN: what a LOOP WRAP looks like. The capture contains one big discont
 146.0 between two heartbeats) from a playhead move, but the 2-second heartbeat is far too coarse to
 show what Live does at a loop boundary - which CT flags as the tricky part. The logging needs to
 fire ON DISCONTINUITY, not on a timer, before that question can be answered.
+
+2026-09-02  THE 0.92 ms JITTER WAS THE HARNESS, ENTIRELY - measured, not argued
+------------------------------------------------------------------------------
+mstDriver paced its blocks with usleep against an absolute deadline. That fixed the 20% drag but
+not the per-block scatter, and the scatter went straight into blockHostTime, from which every tick
+is stamped. The suspicion was recorded in to-test.txt as "probably mostly harness". It was all of it.
+
+The same plug-in, same IAC destination, same 130 BPM, same 24 PPQN, differing only in what paced
+the blocks:
+
+                              block period RMS      delivered interval RMS      worst
+  usleep loop, 256 frames         1.05 ms                0.97 ms             -2.53 ms
+  QU-24 callback, 512 frames      0.019 ms               0.033 ms            -0.14 ms
+
+A factor of 30. The raw timestamp test in tools/midiTimestampTest.c had already shown 0.019 ms with
+no block pacing at all, so 0.033 ms from a real device callback is essentially that number plus the
+device's own callback scatter - the generator is not adding anything measurable.
+
+The lesson generalises past this project: a harness that paces with usleep cannot measure anything
+finer than usleep's overshoot, and it will attribute its own overshoot to whatever it is testing.
+Twice now that has produced a figure that looked like a defect in the plug-in - first a +3.27 ms
+mean, now a 0.92 ms RMS - and both times the plug-in was innocent.
+
+COMMIT MARGIN, the number that replaces the guessing about MS_LOOKAHEAD_MS. The plug-in now measures
+how much future was left on each tick at the moment it was handed to CoreMIDI (msStats.c). Against
+the QU-24 at a 512-frame buffer: mean +15.3 ms, minimum +10.04 ms, 0 late out of 332. The minimum
+sits exactly at the 10 ms lookahead, which says the block was never late enough to eat into it. So
+offline, on an idle machine, the lookahead is still unjustified - but the instrument to justify or
+retire it now exists and reports from inside a real host under real load, which the offline sweep
+never could.
+
+DRIFT MUST BE COUNTED FROM THE TICKS, NOT FROM projectTimeMusic. The first version of the telemetry
+divided reported musical position by wall time, and against a one-bar loop it reported 9.3 BPM
+against a host tempo of 130 - because ppq goes backwards at every wrap. The tick count is monotonic
+by construction and is also the thing actually being put on the wire.
+
+THE HARNESS NOW RUNS REAL AUDIO. mstDriver --audio NAME opens a CoreAudio device (GenBridge's
+device.c and ring.c, copied verbatim into src/ as msDevice/msRing), takes the plug-in's input from
+--in-ch and writes its output to --out-ch. This is what section 3 of the concept needs: the plug-in
+is an Fx precisely so it can hear the hardware answer its own clock, and none of that can be
+developed against silence. Verified against the QU-24 on 2026-09-02: input from channel 14 (Tempest,
+15/16 on the desk) read -62 dBFS of noise floor with the machine silent, 0 ring overflows and 0
+underruns over 750 blocks.
+
+TRANSPORT, verified offline. Start when play begins at zero; SPP followed by Continue when it begins
+anywhere else - beat 128 for bar 8, MIDI beats being sixteenths; Stop on the falling edge, once. The
+harness's listener prints them in arrival order, because an SPP that lands after its Continue is
+useless and only the order shows that.
+
+2026-09-02  TRANSIENT DETECTOR, and what its number does and does not contain
+------------------------------------------------------------------------------
+msDetect.c: one-pole high pass at 150 Hz, instant-attack envelope with a 15 ms release, a 400 ms
+noise-floor follower, and an onset declared when the envelope clears the greater of 4x that floor
+and -56 dBFS, with a 40 ms refractory. Each onset is matched to the OLDEST outstanding scheduled
+tick within 300 ms - oldest rather than nearest, because a device whose latency approaches the
+spacing between hits would otherwise match each transient to the NEXT hit and report a latency near
+zero, which is both wrong and flattering.
+
+VALIDATED WITHOUT HARDWARE. mstDriver --inject-ms D writes a click into the input buffer D ms after
+every quarter note. The expected reading is D minus MS_LOOKAHEAD_MS, because the clock stamps a tick
+10 ms ahead and that is genuinely when CoreMIDI puts it on the wire, so the latency is measured from
+the stamp:
+
+  --inject-ms 20, usleep pacing      mean 10.006 ms   jitter RMS 0.87 ms
+  --inject-ms 20, QU-24 pacing       mean  9.997 ms   jitter RMS 0.038 ms
+
+Against a prediction of exactly 10.000. The detector's own contribution to the jitter figure is
+therefore about 38 microseconds, which is nothing against any drum machine - and once again the
+0.87 ms was the sleeping harness rather than the code.
+
+THE FIRST TICK NOW LANDS ON THE DOWNBEAT, at the same instant as the Start. Leaving phase at zero
+put it one full tick later - 19.2 ms at 130 BPM. That is defensible by the standard and useless
+here: gear differs on whether step 1 fires on the Start byte or on the first clock after it, and the
+two readings would have differed by exactly that 19.2 ms with nothing to say which was right.
+
+WHAT THE FIGURE CONTAINS. It is a ROUND TRIP: tick stamp, to transient in a buffer this plug-in was
+handed. That includes the drum machine's MIDI-in to audio-out delay, which is the number worth
+reporting, plus the interface's A/D, the host's input buffering and the lookahead. The extra terms
+are constant for a rig and buffer size, so they are subtractable once measured - msDevice.c already
+enumerates them. Until they are, the log says "round trip" and not "device latency". The JITTER
+figure needs no such apology: every constant cancels in a deviation.
+
+2026-09-02  FIRST REAL MEASUREMENT - Tempest over USB MIDI, audio via QU-24 15/16
+------------------------------------------------------------------------------
+NOTE PATH, the note probe with the Tempest's own sequencer idle. Forty notes, C1 (note 36 - that is
+what Ableton calls C1, confirmed by the hardware answering it), velocity 110, 400 ms apart:
+
+  round trip mean 21.94 ms, min 21.60, max 22.29, jitter RMS 0.162 ms, peak deviation 0.353 ms
+  40 hits, 0 missed, 0 spurious - repeatable across runs to about 0.05 ms on the mean
+
+That figure is a ROUND TRIP and contains the QU-24's A/D and a 512-frame input buffer (10.67 ms)
+as well as the Tempest. The jitter figure contains none of that, because constants cancel.
+
+CLOCK PATH: nothing. The Tempest receives Start and clock - the destination resolves, the transport
+logs, the interval measures 0.033 ms RMS on the wire - and produces silence, 42 missed and an input
+peak of -66 dBFS. It is not following external sync. Left with CT to check.
+
+THE DETECTOR NEEDED THREE FIXES, and the first two were wrong repairs that the third replaced:
+
+1. A time-only refractory. The kick was still sounding when the 40 ms gate lifted, giving exactly one
+   spurious onset per hit at 40.0 to 46.3 ms - several at exactly the refractory, which is what said
+   the envelope had never come down.
+2. Hysteresis against the hit's own peak, plus freezing the noise floor during a hit so the drum
+   could not raise its own bar. This moved the retrigger from 44 ms to 202 ms but did not remove it:
+   captured and plotted, the kick has no second attack at all, just a long ripply tail hovering
+   around the absolute floor for 300 ms and re-crossing it.
+3. WHAT ACTUALLY WORKED: the detector only looks for a transient while one is DUE. This is a
+   calibration instrument and it knows exactly when it expects a hit; outside those windows a rising
+   edge is not a measurement of anything. 40 hits, 0 missed, 0 spurious, and no threshold anywhere
+   was tuned to this drum, this desk or this gain - which the alternative repair would have been.
+
+LATENCY COMPENSATION now exists: ms_midi_set_offset_ms(), applied inside ms_midi_send_at so it
+reaches ticks, transport and probe notes alike and cannot put them out of step with each other.
+Negative sends earlier. Proved against the harness's --echo-ms: a synthetic 7.5 ms device measured
+7.58 ms and compensating by that figure brought it to 0.6 ms.
+
+AND IT GIVES MS_LOOKAHEAD_MS ITS JUSTIFICATION AT LAST. An event cannot be sent earlier than the
+block it was decided in, so the lookahead is the headroom the compensation spends - compensating
+12 ms with 10 ms of lookahead cannot work, and the commit-margin telemetry says so by going
+negative. The lookahead is not overhead, it is the budget.
+
+TWO TOOLS THAT PAID FOR THEMSELVES IMMEDIATELY. tools/msLevels prints the peak on every input a
+device has, which answered "is it arriving where you think" in five seconds - the question that cost
+EmuUtility a whole session. tools/msCapture dumps one channel to raw floats, which is what settled
+the 202 ms retrigger: the waveform showed there was no second hit, only a tail.
+
+2026-09-02  THE CLOCK PATH, once the Tempest was actually slaved (its sync source was not USB)
+------------------------------------------------------------------------------
+  NOTE path  (probe C1, its sequencer idle)   mean 21.94 ms   jitter RMS 0.162 ms   40/40
+  CLOCK path (its own sequencer, quarters)    mean 21.94 ms   jitter RMS 0.169 ms   42/42
+
+IDENTICAL, to a thousandth of a millisecond on the mean. The difference between the two paths is
+what the drum machine's own sequencer contributes, and on this machine it contributes NOTHING
+measurable - its clock handling is as tight as its note handling. That is a real result about the
+device, and it is only available because the two paths are measured separately.
+
+Both figures are round trips and both contain the QU-24's A/D and a 512-frame input buffer.
+
+COMPENSATION IS A PHASE ADVANCE, NOT AN EARLIER SEND. The obvious mechanism - subtract the measured
+latency from each timestamp - cannot work, and the reason is arithmetic rather than tuning. A tick
+for musical moment m is stamped at wall(m) + L and sounds at wall(m) + L + D, so landing it on m
+needs the stamp at wall(m) - D: earlier than the block that decided it. Raising L raises the
+requirement by exactly as much.
+
+Measured, rather than argued. MST_OFFSET_MS=-21.9 against a 10 ms lead pinned every tick to the
+present and took jitter from 0.169 ms RMS to 3.220 - it turned a clean clock into a bunched one,
+which is precisely the defect this tool exists to remove.
+
+The mechanism that works costs nothing, because the tick stream is periodic: a grid shifted earlier
+by L + D is indistinguishable from one whose PHASE is advanced by that much, and phase is free to
+move. Applied on hardware at 21.9 ms, the commit margin was unchanged (min +10.038 ms, 0 late of
+832) and the clock stayed at 0.188 ms RMS. The advance is tracked incrementally rather than
+reapplied, because it is a fixed number of milliseconds and therefore a changing number of quarter
+notes - a tempo change must move the phase by the difference only.
+
+The one casualty is the first L + D of a run: the grid cannot be advanced before the transport has
+started, so the opening beat is uncompensated. Every beat after it is exact.
+
+NOT YET VERIFIED END TO END. The measured round trip is unaffected by compensation, correctly - the
+detector times from the stamp, so it keeps reporting the device's latency whatever is being done
+about it. Proving the sound now lands ON the beat needs an independent reference: the host's own
+audio. Patching QU-24 output 29 back to an input would supply it, and would pin the constant part of
+the 21.94 ms at the same time.
+
+2026-09-02  THE PANEL
+------------------------------------------------------------------------------
+Built on GenBridge's editor, which is now the house pattern for a plug-in panel: SynthLib's renderer
+rather than AppKit widgets (so it cannot drift from the applications' look without the change being
+visible in all of them), a Metal-backed NSView on a 30 Hz timer, and an IPlugView wrapper that is the
+only Objective-C++ in the project.
+
+WHAT IS SHOWN, in four sections: MASTER (host tempo, transport, position), MIDI OUTPUT (port, clocks
+sent, commit margin and its worst case, late clocks, host block jitter), MEASURED DEVICE (round trip
+mean/min/max, jitter RMS, peak deviation, detection counts, drift), and LATENCY BREAKDOWN. Then a
+one-word verdict and a scrolling trace.
+
+THE BREAKDOWN IS THE PART WORTH GETTING RIGHT, and the rule it follows is that a term is drawn only
+if it is known:
+
+  Schedule lead          exact, ours - MS_LOOKAHEAD_MS
+  Audio input path       NOT knowable from inside a plug-in. The host owns the input device, and
+                         VST3 tells a plug-in nothing about its latency. Drawn as "not measured"
+                         with an empty bar until an audio loopback supplies it.
+  Device MIDI to audio   what is left of the measured round trip once the above is taken out - and
+                         while the input path is unknown it is labelled "Device + input path"
+                         rather than "Device", because a figure called device latency that silently
+                         contains an interface is exactly the overclaim this panel exists to avoid
+
+Zero and "not measured" are different statements, and a panel that renders them the same way is
+lying by omission. The bars make the dominant term obvious at a glance, which is the whole reason
+for showing a breakdown rather than one number.
+
+The trace is DEVIATION from the mean, not absolute latency: the absolute figure is a constant tens
+of milliseconds tall and would flatten everything interesting into a straight line. One point per
+detection rather than per block, since it is a picture of what the hardware did.
+
+THE PROCESSOR-TO-EDITOR CHANNEL is GenBridge's status-slot mechanism, ported for the same reason it
+exists there: with two instances loaded, a single global would have every editor reading whichever
+processor wrote last. The processor claims a slot, sends the number over IConnectionPoint, and the
+figures are then read straight out of the shared structure - a message per frame per instance would
+be a great deal of allocation on a UI timer for numbers that are only ever advisory.
+
+mstDriver now implements a minimal IHostApplication, because an IMessage can only be made by the
+host: a driver passing nullptr as the initialise() context never exercises that path at all, and the
+first place it would be tried would otherwise be Ableton. Verified: "controller connected", "editor
+view created", "controller: status slot 0".
+
+Building the panel needed freetype, which was not built in this project's own SynthLib checkout -
+the nested ThirdParty submodules had never been initialised here. Recipe unchanged, in
+G2-Edit/Docs/Third Party build notes.txt.
+
+2026-09-02  THE PANEL'S CONTROLS, and why the environment variables had to go
+------------------------------------------------------------------------------
+The plug-in loaded in Live, drew every figure correctly, and generated no clock at all. A HOST
+LAUNCHED FROM THE DOCK INHERITS NO SHELL ENVIRONMENT, so every MST_* variable this was developed
+against was empty inside it: MST_MIDI_DEST resolved to nothing, clock.destination stayed -1 and the
+generator returned immediately. G2-Edit's plug-in notes record the identical trap with
+$G2_VST3_PATCH, and this is the second time it has been paid for.
+
+Three real VST3 parameters now: MIDI destination (a list), latency compensation (0-100 ms), and
+which channel the detector analyses (left / right / left+right). The panel has a drop-down for the
+two lists and a stepper for the compensation, drawn with SynthLib's contextMenu - which scrolls
+itself once the list will not fit, so an unbounded port count is safe.
+
+A LIST PARAMETER'S STEP COUNT IS FIXED AT REGISTRATION and cached by the host, so it cannot follow
+how many ports the machine has. Slot count is MS_MIDI_MAX_DEST and only the number of slots pointing
+at something real varies - GenBridge's lesson, taken rather than repeated.
+
+THE PORT IS SAVED BY NAME, NOT BY INDEX, and that was not a precaution: it was measured. The Tempest
+was destination index 6 with a Kronos and a Hydrasynth powered up and index 4 with them off. A
+project storing the index would open a different instrument on a different day, silently. When the
+saved name is absent the panel says "waiting for <name>" rather than falling back to nothing chosen -
+the two are different states and rendering them alike is how a saved setup starts driving the wrong
+port.
+
+BUFFER SIZE IS REPORTED, NOT SETTABLE. A hosted plug-in does not own it. It is shown anyway because
+it is the largest exactly-knowable part of the input path, and the breakdown now subtracts it before
+naming the remainder.
+
+THAT TERM WAS THEN CONFIRMED BY ACCIDENT. Two runs of the same rig differing only in the QU-24's
+buffer:
+
+  512 frames    round trip 21.90 ms
+  256 frames    round trip 16.55 ms
+  difference     5.35 ms, against a predicted 5.33
+
+So the audio in a block really is captured one full buffer before the block arrives, and the "Host
+buffer" row in the breakdown is exact rather than an estimate. What remains unseparated is the
+interface's A/D and the device itself, which is why that row is labelled "Device + interface" until
+a loopback splits them.
+
+mstDriver gained a minimal IParameterChanges and --param ID VALUE, so the route that replaced the
+environment variables is exercised offline rather than first tried in Live.
+
+2026-09-02  DRIFT, MADE READABLE - and what it now actually measures
+------------------------------------------------------------------------------
+The figure jumped about too much to read, and the cause was quantisation rather than noise. It was
+computed from the TICK COUNT, and ticks are integers about 19 ms apart: one tick either way across a
+five-second window is some 3800 ppm.
+
+Counted in FRAMES instead, which is the audio clock itself and has no such step. That also changes
+what the number means, for the better and precisely: it is now the host's AUDIO CLOCK against the
+SYSTEM CLOCK. Blocks arrive at the interface's sample rate while the timestamps this plug-in hands
+CoreMIDI are mach time, so this is exactly the quantity that decides whether a generated clock stays
+with the music over a long session. GenBridge measures the same quantity between two devices and
+steers a ring on it.
+
+Measured on the QU-24, stable to about 1 ppm across a 46-second run:
+
+  -19.0, -18.9, -19.1, -20.0, -19.0, -19.8 ppm
+
+So its sample clock runs about 19 ppm slow against the Mac's - an ordinary crystal offset, and the
+first genuinely physical number this tool has produced about the interface rather than about itself.
+
+TWO THINGS HAD TO BE FIXED BEFORE IT SETTLED.
+
+A LONG WINDOW OR NOTHING. Below about 30 seconds the reading is dominated by whatever the scheduler
+last did rather than by any drift, so the panel now shows the window filling - "measuring - 12 of
+30 s" - instead of a number that swings. Showing a figure and hoping the user discounts it is not a
+design.
+
+AND THE ANCHOR BLOCK'S FRAMES MUST NOT BE COUNTED. The anchor's wall time is taken at the START of a
+block, so counting the frames that block goes on to deliver puts one whole block of audio time
+against no wall time at all. It showed as a drift decaying like 1/t - 158 ppm at 30 seconds, 138 at
+34 - which is the signature of a fixed offset being amortised rather than of any real drift. One
+256-frame block is 5.33 ms, and 5.33 ms over 30 s is 178 ppm, which is the size of what was seen.
+
+THE PANEL WAS ALSO TOO SHORT FOR ITS OWN CONTENT: about 740 units of rows in a 600-unit canvas, so
+the graph fell off the bottom of the window. The canvas is now 740 AND the graph is anchored to the
+canvas bottom rather than to the running y - so a row added above it can crowd the layout but can
+never push it off again. A collision is visible; a control drawn past the edge is not.
+
+The telemetry log line was gated on ticks having been sent, which meant a run with no destination
+chosen produced no telemetry at all - exactly the run someone diagnosing a silent plug-in would be
+looking at. Gated on the window instead.
