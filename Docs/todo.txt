@@ -1,0 +1,16 @@
+MidiSyncTool TODO
+
+Things to do. ONE LINE PER ITEM - keep it that way.
+Measurements, reasoning and completed-work narrative go in findings.txt, NOT here.
+Built-but-unchecked work goes in to-test.txt.
+
+Open decisions (see Docs/design.md)
+
+- Does phase 1 need an audio input bus at all, or only from section 3 onward? Registering as an Fx from the start costs nothing and keeps it open
+- Should MIDI clock run while the transport is stopped - always, never, or a setting?
+- Monitor-only mode's reference: an incoming MIDI clock on a chosen source, the host, or either? Decides whether MIDI input lands in phase 1
+- Does the timestamped MIDI send primitive go into SynthLib (all four projects benefit) or stay local until it settles?
+
+Build
+
+- Nothing yet - see Docs/design.md for the suggested order
