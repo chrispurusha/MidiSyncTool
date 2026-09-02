@@ -1,0 +1,119 @@
+#!/bin/zsh
+# Build the MidiSyncTool VST3 plug-in.
+#
+# A script rather than an Xcode target, for the reason all the sibling projects' do-vst3 is one: a
+# .vst3 is a bundle around a single dylib and needs no build system to say so.
+#
+# DELIBERATELY MINIMAL AT THIS STAGE. No SynthLib, no FreeType, no editor - this first plug-in
+# exists to answer one question, which is what timing information Ableton actually hands us and
+# whether it makes sense. It draws nothing, so it needs none of the drawing stack, and adding that
+# later is a matter of extending this list rather than unpicking anything.
+
+set -e
+
+SDK="${VST3_SDK:-$HOME/Documents/vst3sdk}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+OUT="${MST_VST3_OUT:-$HERE/build/MidiSyncTool.vst3}"
+BIN="$OUT/Contents/MacOS/MidiSyncTool"
+DEPLOYMENT_TARGET=11.5
+
+if [[ ! -d "$SDK/pluginterfaces" ]]; then
+    print -u2 "error: VST3 SDK not found at $SDK"
+    print -u2 "       set VST3_SDK to its location"
+    exit 1
+fi
+
+C_SOURCES=(
+    "$HERE/src/msLog.c"
+)
+
+CPP_SOURCES=(
+    "$HERE/vst3/msVst3.cpp"
+    "$SDK/pluginterfaces/base/funknown.cpp"
+    "$SDK/pluginterfaces/base/coreiids.cpp"
+    "$SDK/public.sdk/source/vst/vstinitiids.cpp"
+)
+
+INCLUDES=(-I"$HERE/src" -I"$HERE/vst3" -I"$SDK")
+
+MST_VERSION="${MST_VERSION:-0.1.0}"
+PLUGIN_DEFS=(-DMST_VERSION_STRING="\"$MST_VERSION\"")
+
+rm -rf "$OUT"
+mkdir -p "$OUT/Contents/MacOS"
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+print "building MidiSyncTool.vst3 (arm64 + x86_64)"
+
+for ARCH in arm64 x86_64; do
+    OBJS=()
+
+    for SRC in "${C_SOURCES[@]}"; do
+        OBJ="$WORK/$(basename ${SRC%.c})-$ARCH.o"
+        clang -c -arch "$ARCH" -mmacosx-version-min=$DEPLOYMENT_TARGET \
+            -std=gnu11 -O2 -Wall -Wextra "${PLUGIN_DEFS[@]}" \
+            "${INCLUDES[@]}" -o "$OBJ" "$SRC"
+        OBJS+=("$OBJ")
+    done
+
+    for SRC in "${CPP_SOURCES[@]}"; do
+        OBJ="$WORK/$(basename ${SRC%.cpp})-$ARCH.o"
+        clang++ -c -arch "$ARCH" -mmacosx-version-min=$DEPLOYMENT_TARGET \
+            -std=gnu++17 -O2 -Wall -Wextra "${PLUGIN_DEFS[@]}" \
+            "${INCLUDES[@]}" -o "$OBJ" "$SRC"
+        OBJS+=("$OBJ")
+    done
+
+    clang++ -arch "$ARCH" -mmacosx-version-min=$DEPLOYMENT_TARGET \
+        -dynamiclib -o "$WORK/MidiSyncTool-$ARCH" "${OBJS[@]}" \
+        -framework CoreFoundation -framework CoreAudio
+done
+
+lipo -create -output "$BIN" "$WORK/MidiSyncTool-arm64" "$WORK/MidiSyncTool-x86_64"
+
+# A bundle needs its Info.plist and the four-character PkgInfo, or the host will not look inside it.
+cat > "$OUT/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>MidiSyncTool</string>
+    <key>CFBundleIdentifier</key><string>com.chrispurusha.midisynctool.vst3</string>
+    <key>CFBundleName</key><string>MidiSyncTool</string>
+    <key>CFBundlePackageType</key><string>BNDL</string>
+    <key>CFBundleSignature</key><string>????</string>
+    <key>CFBundleShortVersionString</key><string>$MST_VERSION</string>
+    <key>CFBundleVersion</key><string>$MST_VERSION</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>LSMinimumSystemVersion</key><string>11.5</string>
+</dict>
+</plist>
+PLIST
+
+printf 'BNDL????' > "$OUT/Contents/PkgInfo"
+
+codesign --force --sign - "$OUT" 2>/dev/null || print -u2 "warning: ad-hoc signing failed"
+
+print ""
+print "Built: $OUT"
+print "Architectures: $(lipo -archs "$BIN")"
+
+# Installed straight into the VST3 folder, replaced rather than merged - a cp -R onto an existing
+# bundle leaves files dropped from the build still installed and still being loaded.
+INSTALL_DIR="${MST_VST3_INSTALL:-/Library/Audio/Plug-Ins/VST3}"
+INSTALLED="$INSTALL_DIR/$(basename "$OUT")"
+
+if [[ -n "$MST_NO_INSTALL" ]]; then
+    print ""
+    print "Not installed (MST_NO_INSTALL is set)."
+else
+    rm -rf "$INSTALLED"
+    cp -R "$OUT" "$INSTALL_DIR/" && print "Installed: $INSTALLED"
+fi
+
+print ""
+print "Logging is OFF until the gate file exists:"
+print "    touch /tmp/midisynctool-log     # then reload the plug-in in the host"
+print "    tail -f /tmp/midisynctool.log"

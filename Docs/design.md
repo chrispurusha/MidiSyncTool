@@ -90,6 +90,13 @@ to "a known sequence", not writing.
 4. **Where the timestamped-send primitive lives** — SynthLib (all four projects benefit, G2-Edit has a
    standing todo for it) or local to this project until it settles.
 
+## House rule: C, with C++ only where VST3 forces it
+
+`vst3/msVst3.cpp` is the COM shim and nothing else. Everything with actual behaviour in it goes in
+`src/*.c` — logging already does. That is the split the sibling projects use, and it is the reason
+GenBridge's bridge core could be lifted into a command line tool without a rewrite: the only C++ in
+the tree is the part the VST3 interfaces make unavoidable.
+
 ## Suggested order for the first working session
 
 1. `do-vst3` + the VST3 skeleton building and loading in `vst3check`, registering as an Fx.

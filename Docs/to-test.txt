@@ -1,0 +1,16 @@
+MidiSyncTool TO TEST
+
+Finished code that is built but not yet checked against a real host.
+Confirmed -> delete the line. Check failed -> move it to todo.txt.
+
+- LOOP WRAP, which is the open question. The first capture had a 2-second heartbeat, far too coarse
+  to show what Live does at a loop boundary. The build now logs "JUMP" the moment projectTimeMusic
+  departs from where a steady tempo says it should be, so a wrap is caught exactly. Set a short
+  loop, let it go round several times, and read the JUMP lines - what matters is whether ppq goes
+  BACKWARDS cleanly to the loop start, whether the sample position does the same, and whether the
+  first block after the wrap is a normal-sized one.
+- TEMPO CHANGE - not exercised in the first capture (CT: "I forgot to change the clock bpm"), so
+  tempo stayed at 105 the whole time. Change it while playing and watch for a tempo-change line and
+  for whether ppq stays continuous across the change or steps.
+- Audio passthrough: the plug-in copies input to output. Confirm a track with it inserted still
+  passes audio unchanged, including when the host hands the same buffer for in and out.

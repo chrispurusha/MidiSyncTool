@@ -1,0 +1,16 @@
+#!/bin/zsh
+# Build the headless timing driver. See tools/mstDriver.cpp for what it is and why it lies.
+set -e
+SDK="${VST3_SDK:-$HOME/Documents/vst3sdk}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+clang++ -O2 -std=gnu++17 -Wall -Wextra \
+    -I "$SDK" \
+    -o "$HERE/mstDriver" \
+    "$HERE/mstDriver.cpp" \
+    "$SDK/pluginterfaces/base/funknown.cpp" \
+    "$SDK/pluginterfaces/base/coreiids.cpp" \
+    "$SDK/public.sdk/source/vst/vstinitiids.cpp" \
+    -framework CoreFoundation
+
+print "Built: $HERE/mstDriver"

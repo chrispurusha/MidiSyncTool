@@ -1,0 +1,124 @@
+MidiSyncTool FINDINGS
+
+Completed work, measurements, and the traps that cost real time.
+One entry per finding, newest first.
+
+
+2026-09-02  A HOST THAT LIES THE WAY ABLETON LIES
+------------------------------------------------------------
+tools/mstDriver - a headless VST3 host that hands the plug-in a ProcessContext modelled on the
+measured behaviour of Live 12.4.5, so clock work can be developed and regression-tested without a
+DAW and without CT in front of one.
+
+DELIBERATELY NOT A CORRECT HOST. An idealised one would be worse than useless: it would let a
+scheduler be written against continuous musical time, which is the exact assumption Live breaks. So
+it reproduces the faults:
+  - systemTime always 0 and kSystemTimeValid never set, whatever the plug-in asks for
+  - continousTimeSamples always 0
+  - the block is never split at a loop boundary
+  - AT A WRAP the report LAGS BY ONE BLOCK: the block after the wrap reads exactly the loop start,
+    and the one after that reads the remainder the wrap actually left - not remainder-plus-a-block
+
+That last point took two attempts. The first version advanced the position through the snap block,
+which put the harness a whole block ahead of Live - and a scheduler developed against it would have
+come out systematically early by up to 5.3 ms at 130 BPM, which is precisely the class of defect
+this tool is meant to detect in other people's equipment.
+
+VERIFIED AGAINST THE CAPTURE, 130 BPM, 1-bar loop, 256-frame blocks at 48 kHz:
+
+                        Live (measured)          mstDriver
+  block before wrap     ppq 3.998222             ppq 3.998222
+  snap block            0.000000, smp 0          0.000000, smp 0
+  block after           0.009750, smp 216        0.009778, smp 217
+  second wrap           3.996417 -> 0 ->         3.996444 -> 0 ->
+                        0.007944, smp 176        0.008000, smp 177
+
+Within one sample throughout, and it reproduces the drift between successive wraps (3.998, 3.996,
+3.994) that comes of a loop length which is not a whole number of blocks.
+
+WHAT IT DOES NOT MODEL YET: tempo ramps (Live reports tempo per block and ppq stays continuous
+across a change - worth adding when the estimator is written), transport start/stop, playhead jumps
+while stopped, and buffer size changes.
+
+
+2026-09-02  WHAT LIVE DOES AT A LOOP WRAP - AND WHY IT MATTERS
+------------------------------------------------------------
+Second capture, with a 1-bar loop at 130 BPM and tempo changes, after a reload. 35 discontinuities.
+
+THE BLOCK IS NEVER SPLIT. n=256 on every single line, wrap or no wrap. Live does not hand a short
+block at the loop boundary, so a wrap always falls INSIDE a block. That was worth checking, because
+if it had split, a tick scheduler could have treated every block as musically contiguous.
+
+WHAT ACTUALLY HAPPENS, and it is not continuous:
+
+    JUMP  ppq 3.998222 -> 0.000000  (expected 4.007972)  smp 0
+    JUMP  ppq 0.000000 -> 0.009750  (expected 0.011556)  smp 216
+
+  At 130 BPM a quarter note is 22153.8 samples and a 256-frame block is 0.011556 QN - which is
+  exactly what the prediction says, so the arithmetic is sound. Then:
+    - the block starting at 3.998222 would have ended at 4.009778, i.e. 39.4 samples PAST the loop
+      end at 4.0
+    - the next block reports ppq EXACTLY 0.000000 and projectTimeSamples EXACTLY 0
+    - the block after that reports 0.009750 QN / 216 samples - and 256 - 39.4 = 216.6
+
+  So Live reports one block AT the loop start regardless of where inside the block the wrap actually
+  fell, and the true sub-block phase only shows up in the FOLLOWING block. projectTimeSamples snaps
+  the same way, so the two agree with each other and both lie in the same way.
+
+  THE CONSEQUENCE FOR THE SCHEDULER: the exact sample at which the loop wrapped CANNOT be read from
+  projectTimeMusic. It has to be inferred - (previous ppq + one block) minus the loop end, converted
+  to samples. Assuming continuity across a wrap would put every tick after it out by up to a block,
+  which at 130 BPM is 5.3 ms, and it would be a systematic error rather than jitter.
+
+OUR OWN CLOCK WORKS. With systemTime unavailable (see the previous entry), AudioGetCurrentHostTime()
+read at the top of process() advances by "wall +5.33 ms" line after line - 256/48000 is 5.333 ms
+exactly. Steady enough to schedule against, which is the thing that had to be true for the
+replacement plan to stand up.
+
+TEMPO CHANGES are reported per block and ppq stays continuous across them (105 -> 114 -> 117 -> 118
+in one capture). The small JUMP lines with deltas around 1e-4 are tempo ramps, not discontinuities:
+the prediction uses the previous block's tempo and the tempo moved. The 1e-6 tolerance is too tight
+and turns a ramp into twenty log lines - it should scale with a fraction of a block.
+
+kCycleActive appears as CYCLE in the flags whenever loop is enabled, so the plug-in can tell that a
+wrap is even possible before one happens.
+
+
+2026-09-02  WHAT ABLETON ACTUALLY GIVES US - AND WHAT IT DOES NOT
+------------------------------------------------------------
+First plug-in, loaded on an audio track in Live 12.4.5 at 105 BPM, 4/4, 48 kHz, 256-frame blocks.
+49 logged lines covering stopped, playing, a playhead jump and stopped again.
+
+WORKS, and the design depends on all of it:
+  - processContext is NOT null. IProcessContextRequirements did its job; asking for it on the first
+    commit was the right call and a plug-in that skipped it would have got nothing.
+  - kTempoValid, kProjectTimeMusicValid, kBarPositionValid, kTimeSigValid and the transport state
+    are all set, every block.
+  - tempo and ppq are EXACTLY self-consistent. At 105 BPM the heartbeat two seconds apart advances
+    ppq by 3.5000 every time - 105/60 * 2 = 3.5 quarter notes. No rounding drift over the capture.
+  - projectTimeSamples is exact and matches: ppq 3.5 at sample 96000, which is 2.0 s at 48 kHz.
+  - barPositionMusic is the ppq of the current bar's start (144.0 when ppq is 146.0, i.e. bar 37 of
+    4/4). Useful directly for Song Position Pointer.
+
+DOES NOT WORK, AND IT IS THE ONE THE WHOLE SCHEDULING PLAN RESTED ON:
+
+  *** ProcessContext.systemTime IS ALWAYS ZERO, AND kSystemTimeValid IS NEVER SET. ***
+
+  All 49 lines: "sysTime 0", and the flag list reads "tempo ptMusic bar timeSig" with no sysTime -
+  despite kNeedSystemTime being requested. continousTimeSamples is likewise always 0.
+
+  design.md said: read systemTime, convert with AudioConvertNanosToHostTime(), hand CoreMIDI packets
+  stamped in the future. That is not available. The replacement is to call AudioGetCurrentHostTime()
+  OURSELVES at the top of process() - which gives the wall clock at the moment the block is being
+  computed, NOT the moment its audio will be heard. The difference is the output latency: unknown,
+  but CONSTANT for a given device and buffer size.
+
+  So the architecture survives and one thing changes character: the round-trip measurement stops
+  being a nicety for section 4 and becomes LOAD-BEARING, because it is what turns "now, as the CPU
+  sees it" into "now, as the listener hears it". Everything else - ppq, tempo, sample position - is
+  solid enough to schedule against once that constant is known.
+
+STILL UNKNOWN: what a LOOP WRAP looks like. The capture contains one big discontinuity (ppq 10.5 ->
+146.0 between two heartbeats) from a playhead move, but the 2-second heartbeat is far too coarse to
+show what Live does at a loop boundary - which CT flags as the tricky part. The logging needs to
+fire ON DISCONTINUITY, not on a timer, before that question can be answered.

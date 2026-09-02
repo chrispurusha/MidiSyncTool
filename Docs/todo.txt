@@ -13,4 +13,10 @@ Open decisions (see Docs/design.md)
 
 Build
 
-- Nothing yet - see Docs/design.md for the suggested order
+- First plug-in built 2026-09-02: loads, logs ProcessContext. NOT yet run in Live - see to-test.txt
+- Calibrate note-on/off latency as well as clock: send notes instead of clock and measure the audio onset the same way, so the device's note latency and its clock latency are separate data points rather than one blended figure
+- mstDriver models loop wraps only: add tempo ramps, transport start/stop, playhead jumps while stopped and buffer-size changes as the scheduler needs them
+- Loop wrap: infer the wrap sample offset rather than trusting ppq, which snaps to the loop start for one block - see findings 2026-09-02
+- JUMP tolerance is 1e-6, too tight: a tempo ramp logs twenty lines of noise. Scale it to a fraction of a block
+- MIDI output port selection, reusing GenBridge's gbMidi
+- Timestamped MIDI send (see design.md) - the decision on whether it lands in SynthLib is still open
