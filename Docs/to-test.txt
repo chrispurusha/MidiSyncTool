@@ -3,6 +3,20 @@ MidiSyncTool TO TEST
 Finished code that is built but not yet checked against a real host.
 Confirmed -> delete the line. Check failed -> move it to todo.txt.
 
+- THE WINDOWED HOST BLOCK JITTER (2026-09-03). The "Host block jitter" row now reads
+  "0.212 ms RMS over 9.9 s  (worst ever +5.209)". Watch the span climb to 10.0 s and stay there,
+  and check it reads shorter at a small buffer - at 32 frames the ring saturates and it should
+  settle near 2.7 s rather than pretend to ten. Then provoke a hiccup (bring another application to
+  the front briefly, or load a heavy device) and confirm the RMS RECOVERS within ten seconds
+  instead of crawling, while "worst ever" keeps the number.
+- THAT THE WORST CASE IS STILL THE SPLIT-BLOCK DETECTOR, same row: the checks below on the
+  split-block fix read the WORST, which is deliberately unchanged and still all-time. If the worst
+  now moves with the window, the labelling is wrong and those checks are measuring the wrong thing.
+- THE LOG'S TWO FIGURES (2026-09-03): the "timing |" line now carries both
+  "block period RMS <all-time> / <recent> over <span> s", and the "model |" line still divides the
+  residual by the ALL-TIME one. Confirm in a real session that the model line's percentage did not
+  change character - if it did, the wrong denominator went in.
+
 - THE "USE MEASURED" BUTTON (2026-09-03), on the Compensation row of the LATENCY BREAKDOWN. Measure
   a device in Generate + measure, switch to Clock only so the figures go HELD, and press it: the
   Compensation row should take the DEVICE term - the breakdown's last bar - and the Residual row

@@ -1009,6 +1009,8 @@ public:
             atomic_store(&status->commitMarginMinMs,  snap.marginMinMs);
             atomic_store(&status->lateTicks,          (unsigned)snap.lateTicks);
             atomic_store(&status->blockPeriodRmsMs,   snap.blockPeriodRmsMs);
+            atomic_store(&status->blockPeriodRecentRmsMs, snap.blockPeriodRecentRmsMs);
+            atomic_store(&status->blockRecentSeconds, snap.blockRecentSeconds);
             atomic_store(&status->blockPeriodWorstMs, snap.blockPeriodWorstMs);
             atomic_store(&status->blockGaps,          (unsigned)snap.blockGaps);
             atomic_store(&status->residualRmsMs,       ms_clock_residual_ms(&clock));
@@ -1191,12 +1193,17 @@ public:
             // port produced no telemetry at all - which is exactly the run someone diagnosing a
             // silent plug-in would be looking at.
             if (snap.windowSeconds > 0.0) {
+                // BOTH BLOCK-JITTER FIGURES GO IN THE LOG, because a log is read after the fact
+                // and the two answer different questions - the all-time one is what the run did,
+                // the recent one is what it was doing at the moment the line was written. The panel
+                // has room for one and shows the recent; a log line has room for both.
                 ms_log_line("  timing | commit margin mean %+.3f min %+.3f RMS %.3f ms | late %llu/%llu"
-                            " | block period RMS %.3f worst %+.3f ms | %llu gap(s) | drift %+.1f ppm"
-                            " | BPM host %.4f measured %.4f over %.1f s",
+                            " | block period RMS %.3f all-time / %.3f over %.1f s, worst %+.3f ms"
+                            " | %llu gap(s) | drift %+.1f ppm | BPM host %.4f measured %.4f over %.1f s",
                             snap.marginMeanMs, snap.marginMinMs, snap.marginRmsMs,
                             (unsigned long long)snap.lateTicks, (unsigned long long)snap.ticks,
-                            snap.blockPeriodRmsMs, snap.blockPeriodWorstMs,
+                            snap.blockPeriodRmsMs, snap.blockPeriodRecentRmsMs,
+                            snap.blockRecentSeconds, snap.blockPeriodWorstMs,
                             (unsigned long long)snap.blockGaps, snap.driftPpm,
                             snap.hostBpm, snap.measuredBpm, snap.windowSeconds);
 
@@ -1208,7 +1215,11 @@ public:
                 //
                 // Expect the residual to be roughly MS_MODEL_KP of the raw figure. Anything near the
                 // raw figure means the model is not absorbing - look at the resync count first.
-                ms_log_line("  model  | block jitter raw %.3f ms -> residual %.3f ms RMS"
+                // THE ALL-TIME RMS IS THE RIGHT DENOMINATOR HERE, and deliberately not the
+                // windowed one the panel shows: ms_clock_residual_ms() is itself an all-time RMS
+                // over the same blocks, so pairing it with a ten-second figure would put two
+                // different spans either side of a division and call the answer a percentage.
+                ms_log_line("  model  | block jitter raw %.3f ms all-time -> residual %.3f ms RMS"
                             " (%.1f %% of raw) worst %.3f ms | %llu resync(s) over %llu blocks",
                             snap.blockPeriodRmsMs,
                             ms_clock_residual_ms(&clock),

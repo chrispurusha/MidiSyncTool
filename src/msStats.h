@@ -43,6 +43,31 @@ extern "C" {
 
 #define MS_STATS_HISTORY          (256) // recent commit margins, for the UI's scrolling graph
 
+// HOW LONG "RECENT" IS FOR THE BLOCK JITTER RMS, and why there are two of that figure at all.
+//
+// The all-time RMS is sqrt(sum / N) since the last reset, so a single bad block of size E reads
+// E/sqrt(N) for ever after. That is not a small effect: one 40 ms block at 256 frames / 48 kHz
+// still reads 0.377 ms RMS a minute later and takes THREE AND A HALF MINUTES to fall back under
+// 0.2 ms, on a host that has been perfect throughout. Watching the panel after a hiccup therefore
+// means watching a number crawl rather than reading what the host is doing now.
+//
+// So the panel's figure is taken over a sliding window instead - the same event reads 0.924 ms
+// while it is in the window and 0.000 the moment it leaves, ten seconds later.
+//
+// NOTHING IS LOST BY FORGETTING, AND ONLY BECAUSE OF WHAT SITS BESIDE IT. blockPeriodWorstMs stays
+// ALL-TIME, so an event that has aged out of the window is still on the panel; the window answers
+// "is the host steady now" and the worst case answers "did anything go wrong at any point". The
+// all-time RMS is kept too, for the log's model-residual ratio, which would otherwise be comparing
+// a windowed figure against an all-time one - see the "model |" line in msVst3.cpp.
+//
+// TRIMMED BY TIME, NOT BY A BLOCK COUNT, so that the window is the same ten seconds whatever the
+// host's buffer size - and so a suspension inside it removes samples rather than stretching the
+// span. MS_STATS_WINDOW_MAX caps the memory: it is enough for ten seconds at 64 frames / 48 kHz,
+// and at settings finer than that the window simply becomes shorter, which the published span says
+// out loud rather than hiding.
+#define MS_STATS_WINDOW_SECONDS    (10.0)
+#define MS_STATS_WINDOW_MAX        (8192)
+
 // A BLOCK PERIOD ERROR THIS LARGE IS NOT A MEASUREMENT, IT IS A GAP.
 //
 // The RMS below is an all-time sum that never forgets, so a single interval that is not really a
@@ -64,8 +89,15 @@ typedef struct {
     double marginMeanMs;
     double marginMinMs;         // the worst case, and the one that matters
     double marginRmsMs;
-    double blockPeriodRmsMs;
-    double blockPeriodWorstMs;
+
+    // TWO BLOCK-JITTER FIGURES THAT MEAN DIFFERENT THINGS - see MS_STATS_WINDOW_SECONDS. The recent
+    // one is what the panel shows and the all-time one is what the log's residual ratio needs. The
+    // worst case is all-time in both cases and is the reason forgetting is safe.
+    double   blockPeriodRmsMs;       // all-time since the last reset
+    double   blockPeriodRecentRmsMs; // over the last MS_STATS_WINDOW_SECONDS
+    double   blockRecentSeconds;     // what that window actually spans, which is less while it fills
+    uint64_t blockRecentBlocks;      // how many intervals are in it, so a reader knows the sample size
+    double   blockPeriodWorstMs;
 
     // WHETHER THE HOST HANDS OVER A CONSTANT BLOCK AT ALL. It is assumed everywhere else here, and
     // Live does not: a size change makes every per-block figure suspect until it is accounted for,

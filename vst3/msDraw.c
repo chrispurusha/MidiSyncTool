@@ -673,17 +673,31 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
     // a steady host, or a host that stalled twice and had it quietly discounted.
     unsigned gaps    = (unsigned)atomic_load(&status->blockGaps);
 
-    // THE WORST CASE TRAVELS WITH THE RMS. The RMS is an all-time sum and moves slowly, so a fault
-    // that happens once per loop and a host that is mildly unsteady all the time look alike in it;
-    // the worst case separates them at a glance. It is also the number a split block used to land a
-    // whole buffer in, which is the reading this row exists to make legible.
-    if (gaps > 0) {
-        snprintf(buffer, sizeof(buffer), "%.3f ms RMS  (worst %+.3f, %u gap%s ignored)",
-                 atomic_load(&status->blockPeriodRmsMs),
+    // THE WORST CASE TRAVELS WITH THE RMS. A fault that happens once per loop and a host that is
+    // mildly unsteady all the time look alike in an RMS; the worst case separates them at a glance.
+    // It is also the number a split block used to land a whole buffer in, which is the reading this
+    // row exists to make legible.
+    //
+    // THE TWO ARE OVER DIFFERENT SPANS, AND THE ROW HAS TO SAY SO. The RMS is now taken over the
+    // last MS_STATS_WINDOW_SECONDS, because an all-time one takes minutes to forget a single bad
+    // block and so answers "what happened at some point" when the question being asked of it is
+    // "what is the host doing now". The worst case stays ALL-TIME - which is what makes forgetting
+    // safe, since the event the window drops is still on the row - so it is labelled "worst ever"
+    // rather than left to be read as belonging to the same window as the figure beside it.
+    //
+    // The span is printed rather than assumed: it is short while the window fills, and shorter
+    // still on a host whose buffer saturates the ring.
+    double   recentSeconds = atomic_load(&status->blockRecentSeconds);
+
+    if (recentSeconds <= 0.0) {
+        snprintf(buffer, sizeof(buffer), "-");
+    } else if (gaps > 0) {
+        snprintf(buffer, sizeof(buffer), "%.3f ms RMS over %.1f s  (worst ever %+.3f, %u gap%s)",
+                 atomic_load(&status->blockPeriodRecentRmsMs), recentSeconds,
                  atomic_load(&status->blockPeriodWorstMs), gaps, (gaps == 1) ? "" : "s");
     } else {
-        snprintf(buffer, sizeof(buffer), "%.3f ms RMS  (worst %+.3f)",
-                 atomic_load(&status->blockPeriodRmsMs),
+        snprintf(buffer, sizeof(buffer), "%.3f ms RMS over %.1f s  (worst ever %+.3f)",
+                 atomic_load(&status->blockPeriodRecentRmsMs), recentSeconds,
                  atomic_load(&status->blockPeriodWorstMs));
     }
     stat(28.0, y, "Host block jitter", buffer);

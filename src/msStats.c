@@ -26,15 +26,24 @@
 // a seqlock here would buy correctness nobody could observe.
 struct tMsStats {
     // Audio thread only.
-    double           sumMargin;
-    double           sumMarginSq;
-    double           minMargin;
-    uint64_t         tickCount;
-    uint64_t         lateCount;
+    double   sumMargin;
+    double   sumMarginSq;
+    double   minMargin;
+    uint64_t tickCount;
+    uint64_t lateCount;
 
-    double           sumPeriodErrSq;
-    double           worstPeriodErr;
-    uint64_t         blockCount;
+    double   sumPeriodErrSq;
+    double   worstPeriodErr;
+    uint64_t blockCount;
+
+    // THE SLIDING WINDOW behind the panel's block-jitter figure - see MS_STATS_WINDOW_SECONDS.
+    // Squared errors and the moment each was measured, oldest at windowHead once it has wrapped.
+    double           windowErrSq[MS_STATS_WINDOW_MAX];
+    uint64_t         windowTime[MS_STATS_WINDOW_MAX];
+    int              windowHead;    // where the next sample goes; also the oldest, once full
+    int              windowCount;
+    double           windowSumSq;
+    uint64_t         windowPushes;  // only to pace the exact recompute below
 
     uint64_t         prevBlockTime;
     double           prevNominalMs;  // block n-1's duration - what the gap to block n must be judged against
@@ -58,6 +67,9 @@ struct tMsStats {
     _Atomic double   pubMarginMin;
     _Atomic double   pubMarginRms;
     _Atomic double   pubPeriodRms;
+    _Atomic double   pubPeriodRecentRms;
+    _Atomic double   pubRecentSeconds;
+    _Atomic uint64_t pubRecentBlocks;
     _Atomic uint64_t pubGaps;
     _Atomic double   pubPeriodWorst;
     _Atomic uint32_t pubFramesMin;
@@ -109,10 +121,34 @@ void ms_stats_reset(tMsStats * stats) {
     stats->historyWrite   = 0;
     memset(stats->history, 0, sizeof(stats->history));
 
+    // THE BLOCK SIZE FIELDS ARE PART OF THE RESET TOO, and leaving them out was a bug rather than a
+    // decision: the atomics below were being published as zero while the working fields kept their
+    // old values, so the panel showed a cleared range and the very next block put the stale one
+    // straight back. Every other figure here describes the run since the reset and these must as
+    // well - not least so that a host whose buffer size is changed between runs stops reporting a
+    // range it no longer uses.
+    stats->prevFrames     = 0;
+    stats->framesMin      = 0;
+    stats->framesMax      = 0;
+    stats->sizeChanges    = 0;
+
+    // The window's contents are as much a part of the run as the sums are. Only the live entries
+    // need clearing - windowCount is what says which those are - but the whole array is cheap here
+    // and a reset is not on any hot path.
+    stats->windowHead     = 0;
+    stats->windowCount    = 0;
+    stats->windowSumSq    = 0.0;
+    stats->windowPushes   = 0;
+    memset(stats->windowErrSq, 0, sizeof(stats->windowErrSq));
+    memset(stats->windowTime, 0, sizeof(stats->windowTime));
+
     atomic_store(&stats->pubMarginMean, 0.0);
     atomic_store(&stats->pubMarginMin, 0.0);
     atomic_store(&stats->pubMarginRms, 0.0);
     atomic_store(&stats->pubPeriodRms, 0.0);
+    atomic_store(&stats->pubPeriodRecentRms, 0.0);
+    atomic_store(&stats->pubRecentSeconds, 0.0);
+    atomic_store(&stats->pubRecentBlocks, (uint64_t)0);
     atomic_store(&stats->pubPeriodWorst, 0.0);
     atomic_store(&stats->pubFramesMin, 0u);
     atomic_store(&stats->pubFramesMax, 0u);
@@ -154,6 +190,62 @@ void ms_stats_tick(tMsStats * stats, uint64_t stampedHostTime, uint64_t submitte
     stats->historyWrite                 = (stats->historyWrite + 1) % MS_STATS_HISTORY;
 }
 
+// THE SLIDING WINDOW BEHIND THE RECENT BLOCK-JITTER RMS - see MS_STATS_WINDOW_SECONDS in the header
+// for why the panel's figure forgets and the worst case does not.
+//
+// Kept as a running sum with each leaving sample subtracted, which is O(1) per block. A running sum
+// drifts, so it is recomputed exactly once every MS_STATS_WINDOW_MAX pushes: one pass over at most
+// 8192 doubles, tens of seconds apart, which is nothing beside the arithmetic it keeps honest over a
+// session hours long.
+static int window_tail(const tMsStats * stats) {
+    return ((stats->windowHead - stats->windowCount) + (2 * MS_STATS_WINDOW_MAX)) % MS_STATS_WINDOW_MAX;
+}
+
+static void window_drop_oldest(tMsStats * stats) {
+    int tail = window_tail(stats);
+
+    stats->windowSumSq -= stats->windowErrSq[tail];
+    stats->windowCount--;
+}
+
+static void window_add(tMsStats * stats, double errMs, uint64_t when) {
+    double sq = errMs * errMs;
+
+    // A FULL RING OVERWRITES ITS OWN OLDEST ENTRY, so that entry has to leave the sum before it is
+    // lost. Saturating means the host's buffer is small enough that MS_STATS_WINDOW_SECONDS does not
+    // fit in the ring; the published span then reads shorter than the target, which is the truth and
+    // is why it is published at all.
+    if (stats->windowCount == MS_STATS_WINDOW_MAX) {
+        window_drop_oldest(stats);
+    }
+    stats->windowErrSq[stats->windowHead] = sq;
+    stats->windowTime[stats->windowHead]  = when;
+    stats->windowSumSq                   += sq;
+    stats->windowHead                     = (stats->windowHead + 1) % MS_STATS_WINDOW_MAX;
+    stats->windowCount++;
+
+    // TRIMMED BY TIME RATHER THAN BY A BLOCK COUNT, so the window is the same ten seconds whatever
+    // the buffer size. ONE ENTRY ALWAYS STAYS: a window emptied by its own trim would publish a
+    // zero RMS, which reads as a perfect host rather than as no measurement.
+    while (  (stats->windowCount > 1)
+          && (host_to_ms(when - stats->windowTime[window_tail(stats)])
+              > (MS_STATS_WINDOW_SECONDS * 1000.0))) {
+        window_drop_oldest(stats);
+    }
+    stats->windowPushes++;
+
+    if ((stats->windowPushes % (uint64_t)MS_STATS_WINDOW_MAX) == 0) {
+        double sum  = 0.0;
+        int    tail = window_tail(stats);
+
+        for (int i = 0; i < stats->windowCount; i++) {
+            sum += stats->windowErrSq[(tail + i) % MS_STATS_WINDOW_MAX];
+        }
+
+        stats->windowSumSq = sum;
+    }
+}
+
 void ms_stats_gap(tMsStats * stats) {
     if (stats != NULL) {
         stats->havePrevBlock = false;
@@ -191,6 +283,7 @@ void ms_stats_block(tMsStats * stats,
         } else {
             stats->sumPeriodErrSq += (errMs * errMs);
             stats->blockCount++;
+            window_add(stats, errMs, blockHostTime);
 
             if (fabs(errMs) > fabs(stats->worstPeriodErr)) {
                 stats->worstPeriodErr = errMs;
@@ -281,6 +374,24 @@ void ms_stats_block(tMsStats * stats,
                  (stats->tickCount > 0) ? sqrt(stats->sumMarginSq / (double)stats->tickCount) : 0.0);
     atomic_store(&stats->pubPeriodRms,
                  (stats->blockCount > 0) ? sqrt(stats->sumPeriodErrSq / (double)stats->blockCount) : 0.0);
+
+    // THE WINDOW'S SPAN IS MEASURED, NOT ASSUMED. It is shorter than MS_STATS_WINDOW_SECONDS while
+    // the window fills, shorter again if the ring saturated, and shorter than the wall time it
+    // covers if a suspension took samples out of it - and every one of those is worth seeing, so
+    // the figure comes from the entries themselves rather than from a block count and a rate.
+    double recentSeconds = 0.0;
+
+    if (stats->windowCount > 1) {
+        int newest = ((stats->windowHead - 1) + MS_STATS_WINDOW_MAX) % MS_STATS_WINDOW_MAX;
+
+        recentSeconds = host_to_ms(stats->windowTime[newest] - stats->windowTime[window_tail(stats)]) / 1000.0;
+    }
+    atomic_store(&stats->pubPeriodRecentRms,
+                 (stats->windowCount > 0)
+                 ? sqrt(fmax(stats->windowSumSq, 0.0) / (double)stats->windowCount)
+                 : 0.0);
+    atomic_store(&stats->pubRecentSeconds, recentSeconds);
+    atomic_store(&stats->pubRecentBlocks, (uint64_t)stats->windowCount);
     atomic_store(&stats->pubPeriodWorst, stats->worstPeriodErr);
     atomic_store(&stats->pubFramesMin, stats->framesMin);
     atomic_store(&stats->pubFramesMax, stats->framesMax);
@@ -304,23 +415,26 @@ void ms_stats_read(const tMsStats * stats, tMsStatsSnapshot * out) {
         }
         return;
     }
-    out->marginMeanMs       = atomic_load(&stats->pubMarginMean);
-    out->marginMinMs        = atomic_load(&stats->pubMarginMin);
-    out->marginRmsMs        = atomic_load(&stats->pubMarginRms);
-    out->blockGaps          = atomic_load(&stats->pubGaps);
-    out->blockPeriodRmsMs   = atomic_load(&stats->pubPeriodRms);
-    out->blockPeriodWorstMs = atomic_load(&stats->pubPeriodWorst);
-    out->blockFramesMin     = atomic_load(&stats->pubFramesMin);
-    out->blockFramesMax     = atomic_load(&stats->pubFramesMax);
-    out->blockSizeChanges   = atomic_load(&stats->pubSizeChanges);
-    out->blocks             = atomic_load(&stats->pubBlocks);
-    out->driftPpm           = atomic_load(&stats->pubDriftPpm);
-    out->driftValid         = (atomic_load(&stats->pubDriftValid) != 0);
-    out->hostBpm            = atomic_load(&stats->pubHostBpm);
-    out->measuredBpm        = atomic_load(&stats->pubMeasuredBpm);
-    out->ticks              = atomic_load(&stats->pubTicks);
-    out->lateTicks          = atomic_load(&stats->pubLate);
-    out->windowSeconds      = atomic_load(&stats->pubWindowSeconds);
+    out->marginMeanMs           = atomic_load(&stats->pubMarginMean);
+    out->marginMinMs            = atomic_load(&stats->pubMarginMin);
+    out->marginRmsMs            = atomic_load(&stats->pubMarginRms);
+    out->blockGaps              = atomic_load(&stats->pubGaps);
+    out->blockPeriodRmsMs       = atomic_load(&stats->pubPeriodRms);
+    out->blockPeriodRecentRmsMs = atomic_load(&stats->pubPeriodRecentRms);
+    out->blockRecentSeconds     = atomic_load(&stats->pubRecentSeconds);
+    out->blockRecentBlocks      = atomic_load(&stats->pubRecentBlocks);
+    out->blockPeriodWorstMs     = atomic_load(&stats->pubPeriodWorst);
+    out->blockFramesMin         = atomic_load(&stats->pubFramesMin);
+    out->blockFramesMax         = atomic_load(&stats->pubFramesMax);
+    out->blockSizeChanges       = atomic_load(&stats->pubSizeChanges);
+    out->blocks                 = atomic_load(&stats->pubBlocks);
+    out->driftPpm               = atomic_load(&stats->pubDriftPpm);
+    out->driftValid             = (atomic_load(&stats->pubDriftValid) != 0);
+    out->hostBpm                = atomic_load(&stats->pubHostBpm);
+    out->measuredBpm            = atomic_load(&stats->pubMeasuredBpm);
+    out->ticks                  = atomic_load(&stats->pubTicks);
+    out->lateTicks              = atomic_load(&stats->pubLate);
+    out->windowSeconds          = atomic_load(&stats->pubWindowSeconds);
 }
 
 int ms_stats_history(const tMsStats * stats, double * out, int max) {

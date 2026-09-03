@@ -4,6 +4,100 @@ Completed work, measurements, and the traps that cost real time.
 One entry per finding, newest first.
 
 
+2026-09-03  THE BLOCK-JITTER RMS NOW FORGETS, AND THE WORST CASE IS WHY THAT IS SAFE
+--------------------------------------------------------------------------
+Reported from real use: "it can take a while for the active RMS to gravitate towards a sensible
+value". It is not impatience, it is arithmetic. The figure was sqrt(sum / N) since the last reset,
+so a single bad block of size E reads E/sqrt(N) for ever after:
+
+    one 40 ms block at 256 frames / 48 kHz, on a host perfect before and after
+
+        after  10 s   0.924 ms RMS
+        after  60 s   0.377 ms
+        after 213 s   0.200 ms      <- three and a half minutes to get back under a fifth of a ms
+        after 600 s   0.119 ms
+
+So the panel's RMS is now taken over a SLIDING WINDOW of MS_STATS_WINDOW_SECONDS (10 s). The same
+event reads 0.924 ms while it is in the window and 0.000 the moment it leaves. Verified against
+msStats directly:
+
+    2000 perfect blocks          recent 0.000 over 10.00 s (1876 blocks) | all-time 0.000
+    1 s after a +40 ms block     recent 0.925                            | all-time 0.853
+    9 s after it                 recent 0.925                            | all-time 0.658
+    11 s after it                recent 0.000                            | all-time 0.625
+    +107 s clean                 recent 0.000                            | all-time 0.258
+
+WHAT MAKES FORGETTING SAFE IS THE COLUMN BESIDE IT. blockPeriodWorstMs is still ALL-TIME, and it
+held +40.000 through every row above. The two figures answer two different questions and the panel
+was already carrying both: the window says whether the host is steady NOW, the worst case says
+whether anything went wrong AT ANY POINT. An all-time RMS answers neither well - it is a lagging
+average of the two - which is why replacing it costs nothing that is not already on screen. The row
+now reads "0.212 ms RMS over 9.9 s  (worst ever +5.209)"; "ever" is doing real work there, because
+two spans on one row with only one of them labelled is exactly how a reader takes the worst case for
+a ten-second figure.
+
+WHAT WAS NOT DONE, AND THE RULE THAT RULED IT OUT. The other candidate was to ignore large values
+early in a run. That is a filter whose THRESHOLD decides what is kept, it biases the figure downward
+and it cannot be falsified - this project's own rule, from the gap-guard entry below: a metric that
+silently drops its worst samples is a prettier lie than one that keeps them. MS_STATS_GAP_MS looks
+like the same thing and is not: those intervals are not block periods at all, and the count is
+published beside the figure. A warm-up skip defined by TIME would have been defensible, as
+MS_STATS_DRIFT_SECONDS is - but with a window there is nothing left for it to fix.
+
+TRIMMED BY TIME, NOT BY A BLOCK COUNT, which is not a detail. A count would make the window a
+different duration at every buffer size, and a suspension inside it would stretch the span it
+claims to cover. Trimming by wall time makes it the same ten seconds everywhere, and a gap takes
+samples OUT of the window rather than lengthening it. The span is published rather than assumed,
+because it is genuinely shorter in three cases: while the window fills, when the ring saturates,
+and after a suspension. At 32 frames / 96 kHz - 3000 blocks a second, where ten seconds would need
+30000 entries - it saturates at MS_STATS_WINDOW_MAX and honestly reports 2.73 s.
+
+THE RUNNING SUM IS RECOMPUTED EXACTLY ONCE PER 8192 PUSHES, because a sum with samples subtracted
+out of it drifts. Tested by filling the window with a known alternating pattern before and after
+2,000,000 blocks (about three hours) of noisy traffic carrying occasional 40 ms errors:
+
+    fresh instance           ring 0.999999978318   exact 1.000000000000
+    after 2,000,000 blocks   ring 0.999999978318   exact 1.000000000000
+
+Identical to 2.2e-08 ms, which is the block timing's own nanosecond quantisation and not the sum.
+
+AND THE RECOMPUTE COSTS NOTHING, measured rather than assumed - 500000 calls to ms_stats_block(),
+three runs:
+
+    mean 0.044 - 0.070 us per call, against a 5333 us block period
+    worst on a recompute block   0.041 - 0.083 us
+    worst on any other block     6.3 - 27.6 us      <- the harness's own scheduling, not the code
+
+The recompute blocks are among the CHEAPEST calls in the run; every spike is the measurement's own
+noise. Same shape as the CPU argument for the third mode and as the jitter budget: the term that
+looked worth worrying about was a rounding error against everything around it. The cost that is
+real is memory - the ring takes the instance from about 3 KB to 144 KB, per plug-in instance.
+
+BOTH FIGURES ARE KEPT, and the all-time one has a job. The "model |" log line divides the model's
+residual by the raw block jitter, and ms_clock_residual_ms() is itself an all-time RMS over the same
+blocks; pairing it with a ten-second denominator would put two different spans either side of a
+division and call the answer a percentage. So the log carries both and the panel shows the recent.
+
+FOUND WHILE LOOKING AT THIS, a separate bug in ms_stats_reset(): it cleared every accumulated figure
+but not framesMin, framesMax, sizeChanges or prevFrames - while publishing zeros for all of them. So
+a reset blanked the block-size range on screen for exactly one block and the stale values came
+straight back:
+
+    after a size change            frames 256..512   sizeChanges 2
+    immediately after reset        frames 0..0       sizeChanges 0
+    500 clean 256-frame blocks     frames 256..512   sizeChanges 2      <- stale
+
+It is the haveBase / havePrevBlock signature for the THIRD time in this project - a field published
+in one place and cleared in none - and it is worth stating that the rule has now caught something on
+every occasion it has been applied. Fixed; the same run now reads 256..256 with 0 changes. It is
+unrelated to the window: the window changes what the RMS means, and this is about which fields a
+reset touches, so it stands on its own.
+
+Still not built, and still worth having: a UI "clear", which msStats.h has advertised in a comment
+since the file was written ("the UI's 'clear'") and which does not exist. Only a transport start and
+the monitor-mode boundary call ms_stats_reset() today.
+
+
 2026-09-03  A CLOCK INPUT - AND A STALE BUNDLE THAT LOOKED LIKE A REGRESSION
 --------------------------------------------------------------------------
 THE FALSE ALARM FIRST, because it cost time and will recur otherwise. The three-way mode drop-down

@@ -53,7 +53,15 @@ typedef struct {
     _Atomic double commitMarginMeanMs;
     _Atomic double commitMarginMinMs;
     atomic_uint    lateTicks;
+    // THE PANEL'S FIGURE IS THE RECENT ONE - see MS_STATS_WINDOW_SECONDS in msStats.h. The all-time
+    // RMS is kept because the log's model-residual ratio is an all-time figure and comparing it
+    // against a windowed denominator would be a quiet lie; the recent one is what a reader watching
+    // the panel after a hiccup actually needs, since the all-time figure takes minutes to forget one
+    // bad block. blockRecentSeconds is what the window really spans, which is shorter while it fills
+    // and shorter again on a host whose buffer is small enough to saturate the ring.
     _Atomic double blockPeriodRmsMs;
+    _Atomic double blockPeriodRecentRmsMs;
+    _Atomic double blockRecentSeconds;
 
     // THE WORST SINGLE BLOCK, beside the RMS. An all-time RMS moves slowly and hides the shape of
     // what is in it: a host that is steady except for one event per loop reads much like a host
