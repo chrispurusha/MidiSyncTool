@@ -8,9 +8,22 @@ at the other end actually does with it — latency, jitter and drift — by list
 coming back.
 
 **Status: working, and taking real measurements.** It generates and schedules a clock, corrects for
-the host's own block jitter, measures a device's latency and jitter from the returning audio, and has
-a **monitor mode** that sends nothing at all and recovers the grid from the audio instead — so gear
-already running on someone else's clock can be measured too.
+the host's own block jitter, and measures a device's latency and jitter from the returning audio.
+
+Three modes, chosen on the panel:
+
+- **Generate + measure** — sends the clock and listens to what comes back. The mode to set up in,
+  and the only one that produces a round trip to compensate for.
+- **Generate clock only** — sends the clock and analyses nothing. The everyday setting: once a
+  device's latency is known the plug-in is just a clock, and can sit on any track. Left measuring on
+  a track the hardware does not return to, it counts a miss every beat and reads as a fault when
+  nothing is wrong.
+- **Monitor** — sends nothing at all and recovers the grid from the audio instead, so gear already
+  running on someone else's clock can be measured too.
+
+A separate **clock input** times an incoming MIDI clock in any of the three — somebody else's
+master, or this plug-in's own output looped back. It measures only; nothing steers the generated
+clock from it.
 
 Results so far are in [`Docs/measurements.md`](Docs/measurements.md), including a four-way comparison
 of clock masters. The short version: on this rig the drum machine's own timing floor swamps every

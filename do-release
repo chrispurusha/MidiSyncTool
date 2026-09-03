@@ -273,7 +273,7 @@ WHAT IT IS
 MidiSyncTool is a VST3 plug-in that generates MIDI clock from your DAW's own
 musical timeline, and then measures what your hardware actually did with it.
 
-It does two jobs at once:
+It does two jobs:
 
   - it sends a clock steadier than the host's audio callback, by modelling
     where musical time falls on the wall clock instead of stamping each tick
@@ -282,6 +282,10 @@ It does two jobs at once:
   - it listens to an audio input, finds the transients your drum machine or
     sequencer produced, and reports the round trip, the jitter and how much of
     it is left after compensation.
+
+It can do both at once, or either on its own. Measuring is the setting-up job;
+once you know what your hardware does, leave it generating the clock and
+nothing else. That is what the Mode control below is for.
 
 There is no application - the plug-in is the whole thing, and it needs a VST3
 host to run in.
@@ -324,7 +328,7 @@ Then rescan plug-ins in your host - most do it at startup. It appears as
 
 USING IT
 
-Put it on a track, and set the two controls at the top of its panel:
+Put it on a track. The SETUP rows at the top of its panel are:
 
   Port          the MIDI destination to send clock to. It starts at "none",
                 deliberately: a plug-in that picks a port on your behalf ends up
@@ -333,17 +337,45 @@ Put it on a track, and set the two controls at the top of its panel:
   Analyse       which side of that track's audio input to listen to for the
                 hardware's transients. Feed the device's audio back into the
                 track for the latency and jitter figures to mean anything.
+                It has no effect in Generate clock only, where nothing is
+                being listened for.
 
   Compensation  how far ahead of the beat to place the clock, to cancel the
                 device's own round trip. The panel measures that round trip for
                 you; dial it in here and watch the residual figure fall.
 
-  Mode          MONITOR ONLY sends nothing and instead fits a grid to whatever
-                is already playing, for measuring a master you do not control.
+  Mode          what the plug-in is doing, and therefore which of the figures
+                under it mean anything. Three settings:
 
-Start the transport and the figures fill in. "Quality" is the one-word verdict:
-under a quarter of a millisecond of jitter is better than any hardware
-sequencer, over two is audible as sloppiness on a fast pattern.
+                Generate + measure - sends the clock AND listens to the audio
+                coming back. This is the one to set up in: it is the only mode
+                that produces a round trip to compensate for.
+
+                Generate clock only - sends the clock and listens to nothing.
+                THIS IS THE EVERYDAY SETTING. Once a device's latency is known
+                the plug-in is simply a clock, and it can then sit on any track
+                you like. Left in Generate + measure on a track your hardware
+                does not come back on, it counts a missed hit every beat - some
+                7800 an hour - and reads as a fault when nothing is wrong.
+
+                Monitor - sends nothing at all and instead fits a grid to
+                whatever is already playing, for measuring a master you do not
+                control.
+
+  Clock in      a MIDI input to time an incoming clock on, reported as its own
+                figures under CLOCK INPUT: somebody else's master, or this
+                plug-in's own output looped back through a virtual port. It
+                measures only - nothing steers the generated clock from it -
+                and it runs in every mode, including Monitor.
+
+Start the transport and the figures fill in. In Generate clock only there is
+nothing to measure, so MEASURED DEVICE reads as dashes, or holds the numbers
+from your last measuring run and says HELD over them - the compensation in
+force came out of those, so they are kept rather than blanked.
+
+"Quality" is the one-word verdict: under a quarter of a millisecond of jitter
+is better than any hardware sequencer, over two is audible as sloppiness on a
+fast pattern.
 
 REQUIREMENTS
 
