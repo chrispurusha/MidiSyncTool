@@ -43,6 +43,23 @@ extern "C" {
 
 #define MS_STATS_HISTORY          (256) // recent commit margins, for the UI's scrolling graph
 
+// A BLOCK PERIOD ERROR THIS LARGE IS NOT A MEASUREMENT, IT IS A GAP.
+//
+// The RMS below is an all-time sum that never forgets, so a single interval that is not really a
+// block period poisons the figure for the rest of the session. And they happen: the host suspends
+// the plug-in, the audio device is released, or - the one that was actually hit - Ableton goes to
+// the BACKGROUND and stops being scheduled while another application is brought to the front.
+//
+// Measured cost of exactly one of them: a host delivering blocks with ZERO error for five minutes,
+// backgrounded for thirty seconds, then perfect for five minutes more, reports 89.44 ms RMS. It
+// reads as a catastrophically bad host and it is entirely the metric's fault.
+//
+// 250 ms is some three hundred times any error a real callback has produced here (Live's worst was
+// 5.2 ms, and that was a block SIZE change rather than lateness) and far below any suspension. The
+// count is published rather than swallowed - the project's own rule that a metric which drops
+// samples must say how many, or it is just a prettier lie. See also ms_stats_gap().
+#define MS_STATS_GAP_MS    (250.0)
+
 typedef struct {
     double marginMeanMs;
     double marginMinMs;         // the worst case, and the one that matters
@@ -57,6 +74,7 @@ typedef struct {
     uint32_t blockFramesMax;
     uint64_t blockSizeChanges;
     uint64_t blocks;            // callbacks counted, as against ticks - the two are not the same
+    uint64_t blockGaps;         // intervals rejected as suspensions - see MS_STATS_GAP_MS
     double   driftPpm;
     double   hostBpm;
     double   measuredBpm;       // from the tick count against the wall clock, over the whole run
@@ -81,6 +99,15 @@ void ms_stats_tick(tMsStats * stats, uint64_t stampedHostTime, uint64_t submitte
 
 // Reset everything but keep the instance - the UI's "clear" and, automatically, a transport start.
 void ms_stats_reset(tMsStats * stats);
+
+// THE HOST IS ABOUT TO STOP FEEDING BLOCKS, or has just started again. Drops only the previous
+// block's timestamp, so the interval ACROSS the pause is never mistaken for a callback period; every
+// figure accumulated so far is kept, which is the point - a suspension is not a reason to throw away
+// a run's history, only a reason not to measure the hole it leaves.
+//
+// This is the same bug the timebase model's `haveBase` had, in a second place: a flag set in one
+// place and cleared in none. Whenever a metric is a step between two samples, ask what clears it.
+void ms_stats_gap(tMsStats * stats);
 
 // UI-thread side. Never blocks and never touches the audio thread's working state; it reads the
 // snapshot the audio thread last published.

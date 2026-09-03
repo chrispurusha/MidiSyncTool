@@ -3,6 +3,55 @@ MidiSyncTool TO TEST
 Finished code that is built but not yet checked against a real host.
 Confirmed -> delete the line. Check failed -> move it to todo.txt.
 
+- THE CLOCK INPUT IN LIVE (2026-09-03). Pick a source on the new "Clock in" row and confirm the
+  CLOCK INPUT section fills: BPM, ms/clock, jitter, "vs host" in ppm, and RUNNING following the
+  master's transport. Verified offline against synthetic clocks and against our own output through
+  IAC; never against a real external master.
+- THE MEASUREMENT THE CLOCK INPUT EXISTS FOR: point Live's Sync at IAC Bus 1, point Clock in at the
+  same port, and read Live's own clock jitter. Then set the plug-in's output to IAC instead, with
+  Live's own sync OFF, and read ours the same way. Same code, same reference, both figures - this is
+  the A/B the project has never been able to make honestly.
+- Whether the "vs host" ppm figure is steady in a real host. Offline it wanders +/-26 ppm run to run
+  against a fit standard error of about 3 ppm, which is suspected to be the usleep harness's pacing
+  rather than the estimator. If Live shows the same wander, the estimator is at fault and the window
+  or the gap ratio wants revisiting.
+- MONITOR MODE AND THE CLOCK INPUT AT ONCE, which is now possible and has never been run: the audio
+  grid and the MIDI clock fitted simultaneously from two independent references. They should agree.
+- The SETUP heading and the fifth control row, by eye. The canvas grew from 770 to 920 units for the
+  CLOCK INPUT section; check nothing collides with the graph, which is anchored to the bottom, and
+  that the taller panel is not awkward in Live's plug-in window.
+- The clock source surviving a saved set, including the case the destination side already handles:
+  save with a source chosen, unplug or switch off that port, reopen, and confirm it says so rather
+  than silently listening to a different one. The name is stored, not the index.
+- THE BACKGROUNDING FIX (2026-09-03). Reproduce what caused it: play in Live, watch Host block
+  jitter settle, then bring another application to the front for half a minute and come back. The
+  figure must stay where it was, and if the stall was long enough the row should read "(1 gap
+  ignored)". Before this fix that scenario reported tens of milliseconds and never recovered.
+- Whether Live announces the suspension at all - watch for setProcessing(0)/setActive(0) in
+  /tmp/midisynctool.log around a backgrounding. If it does, ms_stats_gap() handles it and the gap
+  count stays 0; if it does not, the 250 ms guard catches it and the count goes up. Either is
+  correct, but which one fires says what Live actually does and is worth knowing.
+- THE THREE-WAY MODE DROP-DOWN IN LIVE (2026-09-03), which replaced the two-state toggle on the
+  same parameter id. Check the menu opens on the row and lists all three; that choosing one changes
+  the box colour (neutral / blue / amber); and that Live's own generic parameter panel shows it as
+  a three-step list reading "generate + measure", "clock only", "monitor".
+- SAVED-STATE COMPATIBILITY, which is the claim that costs the most if it is wrong: open a set
+  SAVED BY THE PREVIOUS BUILD with the Monitor toggle ON, and confirm it comes back in Monitor and
+  not in Clock only. Then save in each of the three modes and reopen.
+- THE HELD RENDERING, which is geometry and colour and can only be judged by eye. Measure something
+  so there are real figures, then switch to Clock only: the MEASURED DEVICE heading should gain
+  "- HELD FROM THE LAST RUN" with a line under it, every figure below should drop a tier, the
+  latency breakdown's bars should drain to drab, the verdict should lose its green and read
+  "(held)", and the graph trace should go dark. Check the extra held line does not push the
+  breakdown into the graph, which is anchored to the canvas bottom and will not move for it.
+- MONITOR MODE'S NEWLY DIMMED ROWS: Commit margin, Late clocks and "after filtering" should now
+  read a dash rather than a perfect 0.000, and LATENCY BREAKDOWN should say NOT APPLICABLE with no
+  full-width Schedule lead bar. This was a real misreading, not a cosmetic change.
+- THAT THE CLOCK IS UNTOUCHED IN CLOCK-ONLY MODE over a long run in Live - commit margin, late
+  count and the model residual should look exactly as they do in Generate + measure. Verified
+  offline (313 ticks, 0 late, +12.7 ms mean margin) but not in a host.
+- The port row dimmed in monitor and the analyse row dimmed in clock-only: both must still be
+  CLICKABLE and settable while dim, so a rig can be set up before switching modes.
 - LOOP WRAP, which is the open question. The first capture had a 2-second heartbeat, far too coarse
   to show what Live does at a loop boundary. The build now logs "JUMP" the moment projectTimeMusic
   departs from where a steady tempo says it should be, so a wrap is caught exactly. Set a short
@@ -56,12 +105,13 @@ Confirmed -> delete the line. Check failed -> move it to todo.txt.
   in the same region as the 0.113 ms measured while we were clocking it.
 - Monitor mode with a pattern containing RESTS, which is what the grid-slot assignment exists for.
   Every test so far has had a hit in every slot, so the empty-slot path is unexercised.
-- The Mode toggle itself in Live: that it survives a saved set, and that leaving monitor mode
-  mid-playback re-sends START or SPP + CONTINUE rather than resuming silently.
+- The Mode control itself in Live: that it survives a saved set, and that leaving monitor mode
+  mid-playback re-sends START or SPP + CONTINUE rather than resuming silently. Now also from
+  Clock only, which never stopped the clock and so must NOT re-send anything on the way out.
 - THE THREE PANEL LAYOUT FIXES (2026-09-03), which are geometry and can only be judged by eye in a
   host. The compensation row now has its own 132 px value box instead of the shared 330, so its
   arrows sit together rather than a third of a panel apart; every button is inset by
-  DRAW_BUTTON_MARGIN so it stops drawing 4 px past its row into the row below; and the Mode toggle
+  DRAW_BUTTON_MARGIN so it stops drawing 4 px past its row into the row below; and the Mode row
   draws its own TEXT_H label instead of going through draw_button(), which sized the text off the
   row height and ran the sentence off the end of the box. Check the four rows line up, that the
   arrows still hit where they are drawn, and that the mode sentence fits.

@@ -53,7 +53,24 @@ cd ${0:a:h}
 
 VST3_NAME="MidiSyncTool.vst3"
 VOL_NAME="MidiSyncTool"
-DERIVED="build/release-tmp"
+
+# OUTSIDE THE PROJECT, AND REMOVED ON THE WAY OUT. Both halves of that matter, and
+# the reason is a real afternoon lost to it.
+#
+# This used to build into build/release-tmp and leave it there. The result was a
+# SECOND MidiSyncTool.vst3, correctly formed and identically named, sitting inside
+# a directory a host may well be scanning - and VST3 scanning recurses. Live found
+# both, loaded the stale one, and presented an old build's GUI with no indication
+# that anything was wrong. It reads exactly like a regression in the plug-in, and
+# it is not: it is two bundles with one name.
+#
+# A temporary directory cannot be on any host's search path, and the trap removes
+# it whether the release succeeds, fails a check, or is interrupted. STAGE joins
+# the same trap further down rather than installing a second one that would
+# replace this.
+DERIVED=$(mktemp -d)
+STAGE=""
+trap 'rm -rf "$DERIVED" "$STAGE"' EXIT
 
 # --- version -------------------------------------------------------------
 
@@ -162,19 +179,17 @@ VERSION_CLEAN="${VERSION#[Vv]}"
 
 echo "==> clean build, universal"
 
-# BUILT INSIDE THE RELEASE'S OWN TREE, not the shared build/ directory - the same
-# rule G2-Edit's release learned the hard way. build/MidiSyncTool.vst3 is the copy
-# a developer has installed for testing, and a release must neither overwrite it
-# nor race anything else writing there.
+# BUILT IN ITS OWN TEMPORARY TREE, not the shared build/ directory - the same rule
+# G2-Edit's release learned the hard way. build/MidiSyncTool.vst3 is the copy a
+# developer has installed for testing, and a release must neither overwrite it nor
+# race anything else writing there. See the DERIVED note at the top for why it is
+# no longer a subdirectory of build/ either.
 #
 # MST_NO_INSTALL matters just as much: do-vst3 installs into
 # /Library/Audio/Plug-Ins/VST3 by default, and making a .dmg is not consent to
 # replace the plug-in the machine is currently running.
-rm -rf $DERIVED
-mkdir -p $DERIVED
-
 if ! MST_VERSION="$VERSION_CLEAN" \
-     MST_VST3_OUT="$PWD/$DERIVED/$VST3_NAME" \
+     MST_VST3_OUT="$DERIVED/$VST3_NAME" \
      MST_NO_INSTALL=1 \
      ./do-vst3 >/dev/null; then
     echo "error: the VST3 build failed - run ./do-vst3 on its own for the reason" >&2
@@ -237,8 +252,10 @@ echo "==> staging disk image contents"
 VOLUME="$VOL_NAME $VERSION_CLEAN"
 VOLUME="${VOLUME[1,27]}"
 
+# NO NEW TRAP HERE. The one set beside DERIVED covers both, and a second trap on
+# EXIT would silently replace the first - leaving the build tree behind again,
+# which is the whole thing this is guarding against.
 STAGE=$(mktemp -d)
-trap "rm -rf $STAGE" EXIT
 
 cp -R "$VST3_BUNDLE" "$STAGE/"
 

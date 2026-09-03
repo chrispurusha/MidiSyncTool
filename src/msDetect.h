@@ -86,7 +86,28 @@ typedef enum {
     // apart; over a hundred seconds they separate by milliseconds. Fitting phase alone would report
     // that separation as jitter and the figure would grow with the length of the run. Fitting rate
     // as well makes the measurement immune to it, and to any tempo offset at all.
-    eMsDetectMonitor
+    eMsDetectMonitor,
+
+    // OFF: the clock is generated but nothing is listened for.
+    //
+    // Measuring is a calibration act, not a permanent condition - once a device's latency is known
+    // the everyday use of this plug-in is as a clock, on whatever track suits, with no obligation to
+    // be the one carrying the hardware's audio return. That is the mode for it.
+    //
+    // IT IS NOT A CPU SAVING, and should not be sold as one. Measured on this machine, the whole
+    // detector costs 0.022 % of one core (1.16 us per 256-frame block against a 5.33 ms period), so
+    // there is nothing here to reclaim - the same lesson as the jitter budget, where the term that
+    // looked worth optimising was a rounding error against everything around it.
+    //
+    // WHAT IT ACTUALLY FIXES is a panel that lies. Every Nth tick registers an expectation, and
+    // ms_detect_audio() ages those out against silence - so a plug-in sitting on a track the drum
+    // machine does not come back on counts a MISS PER BEAT, for ever, and reads as a fault when
+    // nothing whatever is wrong. Nothing is expected here, so nothing can be missed.
+    //
+    // The figures from the last real run are DELIBERATELY LEFT STANDING - see ms_detect_set_source()
+    // - because the compensation dialled in on the panel came from them and a number in force should
+    // have its provenance visible. The panel dims them and says they are held.
+    eMsDetectOff
 } tMsDetectSource;
 
 typedef struct tMsDetect tMsDetect;

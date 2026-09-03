@@ -136,7 +136,8 @@ public:
         // EXPLICIT, not a chain of conditionals with a fall-through default. The previous form
         // mapped anything it did not recognise onto the compensation parameter, so a control added
         // later would silently dial in latency instead of doing its own job. These numbers are
-        // kParamMidiDest / kParamCompensate / kParamAudioSource / kParamMonitor in msVst3.cpp, and
+        // kParamMidiDest / kParamCompensate / kParamAudioSource / kParamMode / kParamClockSource
+        // in msVst3.cpp, and
         // the two lists have to be read together.
         ParamID id = 1;   // kParamCompensate
 
@@ -144,7 +145,8 @@ public:
             case eMsEditMidiDest:    id = 0; break;
             case eMsEditCompensate:  id = 1; break;
             case eMsEditAudioSource: id = 2; break;
-            case eMsEditMonitor:     id = 3; break;
+            case eMsEditMode:        id = 3; break;
+            case eMsEditClockSource: id = 4; break;
             default:                 return;
         }
 
@@ -170,7 +172,8 @@ public:
                            controller->getParamNormalized(0),
                            controller->getParamNormalized(2),
                            controller->getParamNormalized(1),
-                           controller->getParamNormalized(3));
+                           controller->getParamNormalized(3),
+                           controller->getParamNormalized(4));
     }
 
     tresult PLUGIN_API isPlatformTypeSupported(FIDString type) SMTG_OVERRIDE {

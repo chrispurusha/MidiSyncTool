@@ -43,6 +43,7 @@ struct tMsStats {
     uint32_t         framesMax;
     uint64_t         sizeChanges;
     bool             havePrevBlock;
+    uint64_t         gapCount;
 
     uint64_t         firstPlayTime; // wall clock at the first playing block since the last reset
     uint64_t         firstPlayTicks;
@@ -57,6 +58,7 @@ struct tMsStats {
     _Atomic double   pubMarginMin;
     _Atomic double   pubMarginRms;
     _Atomic double   pubPeriodRms;
+    _Atomic uint64_t pubGaps;
     _Atomic double   pubPeriodWorst;
     _Atomic uint32_t pubFramesMin;
     _Atomic uint32_t pubFramesMax;
@@ -101,6 +103,7 @@ void ms_stats_reset(tMsStats * stats) {
     stats->sumPeriodErrSq = 0.0;
     stats->worstPeriodErr = 0.0;
     stats->blockCount     = 0;
+    stats->gapCount       = 0;
     stats->havePrevBlock  = false;
     stats->havePlayAnchor = false;
     stats->historyWrite   = 0;
@@ -115,6 +118,7 @@ void ms_stats_reset(tMsStats * stats) {
     atomic_store(&stats->pubFramesMax, 0u);
     atomic_store(&stats->pubSizeChanges, (uint64_t)0);
     atomic_store(&stats->pubBlocks, (uint64_t)0);
+    atomic_store(&stats->pubGaps, (uint64_t)0);
     atomic_store(&stats->pubDriftPpm, 0.0);
     atomic_store(&stats->pubDriftValid, 0);
     atomic_store(&stats->pubHostBpm, 0.0);
@@ -150,6 +154,12 @@ void ms_stats_tick(tMsStats * stats, uint64_t stampedHostTime, uint64_t submitte
     stats->historyWrite                 = (stats->historyWrite + 1) % MS_STATS_HISTORY;
 }
 
+void ms_stats_gap(tMsStats * stats) {
+    if (stats != NULL) {
+        stats->havePrevBlock = false;
+    }
+}
+
 void ms_stats_block(tMsStats * stats,
                     uint64_t   blockHostTime,
                     uint32_t   blockFrames,
@@ -172,11 +182,19 @@ void ms_stats_block(tMsStats * stats,
     if (stats->havePrevBlock && (blockHostTime > stats->prevBlockTime)) {
         double errMs = host_to_ms(blockHostTime - stats->prevBlockTime) - stats->prevNominalMs;
 
-        stats->sumPeriodErrSq += (errMs * errMs);
-        stats->blockCount++;
+        // A GAP IS NOT A LATE BLOCK. ms_stats_gap() covers the suspensions the host announces; this
+        // covers the ones it does not, and backgrounding is the case in point - the process simply
+        // stops being scheduled, with no setProcessing(false) to say so. Counted, never summed: one
+        // of these is worth more than the whole rest of the session put together.
+        if (fabs(errMs) > MS_STATS_GAP_MS) {
+            stats->gapCount++;
+        } else {
+            stats->sumPeriodErrSq += (errMs * errMs);
+            stats->blockCount++;
 
-        if (fabs(errMs) > fabs(stats->worstPeriodErr)) {
-            stats->worstPeriodErr = errMs;
+            if (fabs(errMs) > fabs(stats->worstPeriodErr)) {
+                stats->worstPeriodErr = errMs;
+            }
         }
     }
 
@@ -268,6 +286,7 @@ void ms_stats_block(tMsStats * stats,
     atomic_store(&stats->pubFramesMax, stats->framesMax);
     atomic_store(&stats->pubSizeChanges, stats->sizeChanges);
     atomic_store(&stats->pubBlocks, stats->blockCount);
+    atomic_store(&stats->pubGaps, stats->gapCount);
     atomic_store(&stats->pubDriftPpm, driftPpm);
     atomic_store(&stats->pubDriftValid, (windowSeconds >= MS_STATS_DRIFT_SECONDS) ? 1 : 0);
     atomic_store(&stats->pubHostBpm, tempo);
@@ -288,6 +307,7 @@ void ms_stats_read(const tMsStats * stats, tMsStatsSnapshot * out) {
     out->marginMeanMs       = atomic_load(&stats->pubMarginMean);
     out->marginMinMs        = atomic_load(&stats->pubMarginMin);
     out->marginRmsMs        = atomic_load(&stats->pubMarginRms);
+    out->blockGaps          = atomic_load(&stats->pubGaps);
     out->blockPeriodRmsMs   = atomic_load(&stats->pubPeriodRms);
     out->blockPeriodWorstMs = atomic_load(&stats->pubPeriodWorst);
     out->blockFramesMin     = atomic_load(&stats->pubFramesMin);

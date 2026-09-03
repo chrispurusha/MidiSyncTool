@@ -25,12 +25,13 @@ extern "C" {
 // Scheduled ahead gave 0.019 ms RMS with no drift; sent immediately from a sleeping loop gave
 // 4.157 ms RMS and a 3.9 ms MEAN error. See Docs/findings.txt.
 
-#define MS_MIDI_MAX_DEST    (64)
-#define MS_MIDI_NAME_LEN    (64)
+#define MS_MIDI_MAX_DEST      (64)
+#define MS_MIDI_MAX_SOURCE    (64)
+#define MS_MIDI_NAME_LEN      (64)
 
-// Rebuild the cached destination list. Talking to CoreMIDI takes its locks, so this is NEVER called
-// from drawing or from the audio thread - GenBridge learned that one the hard way, with an
-// enumeration inside a 30 Hz repaint contending with the opens it was driving.
+// Rebuild the cached destination AND source lists. Talking to CoreMIDI takes its locks, so this is
+// NEVER called from drawing or from the audio thread - GenBridge learned that one the hard way, with
+// an enumeration inside a 30 Hz repaint contending with the opens it was driving.
 void ms_midi_refresh(void);
 
 int ms_midi_count(void);
@@ -39,6 +40,27 @@ void ms_midi_name(int index, char * out, unsigned long len);
 // -1 when no destination of that name is present, which is the honest answer for a saved setup
 // whose interface is unplugged.
 int ms_midi_index_for_name(const char * name);
+
+// ---- LISTENING, which is a separate list from sending -----------------------------------------
+//
+// A port that can be sent to and a port that can be listened to are DIFFERENT ENDPOINTS with
+// different indices, even when they carry the same name. IAC Driver Bus 1 is both, and it is the
+// port this exists for: point Live's Sync at it, point this at it, and Live's own generated clock
+// can be measured by the same code that measures ours.
+int ms_midi_source_count(void);
+void ms_midi_source_name(int index, char * out, unsigned long len);
+int ms_midi_source_index_for_name(const char * name);
+
+// EVERY BYTE OF INTEREST, ON THE CoreMIDI RECEIVE THREAD. Registered rather than called directly so
+// this file keeps knowing nothing about what a clock means - it moves bytes and timestamps.
+typedef void (*tMsMidiListener)(uint8_t status, uint64_t hostTime, void * user);
+
+void ms_midi_set_listener(tMsMidiListener listener, void * user);
+
+// Connect to one source, or -1 for none. Disconnects whatever was connected before, so there is
+// never more than one master feeding the estimator - two would interleave into nonsense.
+bool ms_midi_listen(int index);
+int ms_midi_listening(void);
 
 // THE POINT OF THIS FILE. hostTime is a mach host-clock value - AudioGetCurrentHostTime() plus
 // however far ahead the event belongs. Pass 0 only for something genuinely immediate; a clock tick

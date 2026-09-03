@@ -4,6 +4,178 @@ Completed work, measurements, and the traps that cost real time.
 One entry per finding, newest first.
 
 
+2026-09-03  A CLOCK INPUT - AND A STALE BUNDLE THAT LOOKED LIKE A REGRESSION
+--------------------------------------------------------------------------
+THE FALSE ALARM FIRST, because it cost time and will recur otherwise. The three-way mode drop-down
+came up in Ableton as the old two-state button, which reads as a regression and was not one. There
+were TWO MidiSyncTool.vst3 on the machine, correctly formed and identically named:
+
+    build/MidiSyncTool.vst3              13:54   current
+    build/release-tmp/MidiSyncTool.vst3  13:11   the previous build
+
+build/release-tmp is do-release's private derived-data path, and it was left behind after a release
+build. VST3 SCANNING RECURSES, so a host whose search path includes the project's build directory
+finds both and may load either - and the one it loaded presented an old build's GUI with nothing
+whatever to say so. The installed system-wide copy was current the whole time; grepping the binary
+for the mode strings is what settled it in seconds.
+
+Fixed at the source: do-release now builds in a mktemp directory - which cannot be on any host's
+search path - and removes it on exit through a trap set beside it, covering success, failure and
+interruption alike. The staging directory joins that same trap rather than installing a second one
+on EXIT, which would silently replace the first.
+
+  ** A BUILD ARTEFACT WITH A PRODUCTION NAME MUST NOT BE LEFT INSIDE A DIRECTORY A HOST SCANS. **
+
+THE CLOCK INPUT, which is the actual work. src/msClockIn.c plus MIDI source enumeration and a
+listener in src/msMidi.c, behind a new kParamClockSource. It MEASURES ONLY - nothing steers the
+generated clock from it, which is a separate feature and should not be built on an estimator whose
+numbers nobody has read yet.
+
+WHAT IT IS FOR: the standing question "how much better is our clock than Live's own?" has never had
+a defensible answer, because the only reference was a drum machine's audio onsets - carrying the
+device, the desk and the A/D on top of anything the wire did. Now Live's Sync and this can be
+pointed at the same IAC port and both clocks timed by the same code against the same reference. The
+wire measures at 0.013 ms; the audio path at 0.132 ms at best.
+
+VERIFIED against synthetic clocks at an exact 130 BPM / 19.230769 ms:
+
+    perfect clock            130.0001 BPM   jitter 0.00031 ms   192 fitted   0 gaps
+    1 clock in 20 dropped    130.0000 BPM   jitter 0.00030 ms   192 fitted   0 gaps
+    2 s dropout mid-stream   130.0001 BPM   jitter 0.00003 ms   192 fitted   1 gap
+    after STOP               running=0, stops=1, window cleared
+
+THE SECOND ROW IS THE ONE THAT MATTERS. Fitting against ordinal position instead of an assigned
+SLOT would read 20 real periods per 19 arrivals - 130 x 19/20 = 123.5 BPM, a 6.5 BPM error from one
+clock in twenty going missing. Assigning n = round(t / period) makes it invisible. That is the THIRD
+place in this project the same omission would have bitten; monitor mode was the second, where a rest
+in the drum pattern did it. The period itself comes from the MEDIAN interval for the same reason - a
+mean carries one doubled interval into the rate for the whole window.
+
+Live self-test through IAC, the plug-in measuring its own generated clock: 129.9966-130.0001 BPM,
+jitter 0.025-0.044 ms RMS, 0 gaps. That agrees with the 0.033 ms measured a day earlier by
+tools/midiTimestampTest.c - two independent code paths, one answer. The ppm column wanders +/-26 ppm
+run to run, which is larger than the fit's own standard error (~3 ppm) and is the usleep harness's
+pacing rather than the estimator; it should be re-read against a real host before being quoted.
+
+A FIFTH PARAMETER COULD NOT SIMPLY EXTEND THE SAVED STATE, and this would have been a silent
+corruption. The block is [4 doubles][64-byte destination name], so reading 5 doubles from an OLD
+block succeeds, is not short, and loads the first eight characters of the port name - "IAC Driv" -
+as a parameter value. Everything added after v1 therefore goes AFTER the name, where an old file
+runs out and the short read leaves the default standing. The controller's setComponentState had to
+learn the identical layout, or the two halves would disagree about what the plug-in is set to with
+only the controller's version on screen.
+
+The panel's heading over the control rows is now SETUP rather than MIDI OUTPUT: two of its five rows
+are inputs, and it was already half wrong before the clock input made it plainly so.
+
+2026-09-03  HOST BLOCK JITTER READ 89 ms BECAUSE ABLETON WENT TO THE BACKGROUND
+--------------------------------------------------------------------------
+Reported from a real session: "host block jitter seems much higher than it was", then "jitter now
+seems OK on an Ableton restart", then the diagnosis - "possibly happened when I pulled the terminal
+to the foreground". All three observations are the same bug.
+
+THE METRIC HAD NO WAY TO FORGET, AND NOTHING CLEARED ITS BASELINE. blockPeriodRmsMs is
+sqrt(sumPeriodErrSq / blockCount) over the whole run, and `havePrevBlock` was set true in one place
+and cleared in NONE. So any interval in which the host stopped calling process() was measured as a
+single colossal callback period and squared into a sum that never forgets. Backgrounding Ableton
+does exactly that.
+
+MEASURED, against msStats directly - a host that is otherwise PERFECT:
+
+    5 min at exactly the nominal period          block period RMS  0.0000 ms
+    + one 30 s gap, then 5 min more, perfect     block period RMS 89.4431 ms
+
+Ninety milliseconds of reported host jitter, every bit of it the metric's own fault, and permanent
+until the plug-in reloaded - which is precisely why restarting Ableton "fixed" it.
+
+THIS IS THE SAME BUG AS THE MODEL RESIDUAL'S `haveBase`, in a second place, and the general rule is
+now stated twice: WHENEVER A METRIC IS A STEP BETWEEN TWO SAMPLES, ASK WHAT CLEARS IT. A flag set in
+one place and cleared in none is the signature.
+
+Two fixes, because the two failure modes are different:
+  - ms_stats_gap() drops only the previous block's timestamp, and setActive/setProcessing call it
+    through MstProcessor::suspend(), which also clears clock.haveBase and clock.havePrev. That
+    covers every suspension the HOST announces. No accumulated figure is discarded: a suspension is
+    a reason not to measure the hole, not a reason to throw away the run.
+  - MS_STATS_GAP_MS (250 ms) covers the ones it does not announce, which is the backgrounding case -
+    the process simply stops being scheduled with no setProcessing(false) to say so. An interval
+    beyond it is COUNTED, never summed.
+
+The count is published and shown beside the figure ("0.212 ms RMS (2 gaps ignored)") rather than
+swallowed. Without it the same reading means two different things - a steady host, or one that
+stalled twice and had it quietly discounted - and a metric that silently drops its worst samples is
+a prettier lie than one that keeps them.
+
+Verified: the 30 s gap now costs 0.0000 ms and reads "gaps 1", while a genuinely late 40 ms block is
+still measured and still reported as the worst case (RMS 0.1193, worst +40.000). The guard must not
+swallow the thing it exists to report.
+
+NOT A REGRESSION FROM THE MODE WORK, and that was checked rather than assumed: the same harness run
+against a build of the previous commit and against the new one gave 0.546 / 0.593 ms and 0.572 /
+0.574 ms - indistinguishable. msStats.c was not touched by that change at all.
+
+AND THE ~0.55 ms IN THOSE RUNS IS NOT A PLUG-IN FIGURE. mstDriver --realtime without --audio is the
+usleep harness, which reports its own overshoot; it has now misled this project three times. Any
+block-jitter number quoted without --audio or without a real host is the harness measuring itself.
+
+2026-09-03  A THIRD MODE - AND THE CPU ARGUMENT FOR IT WAS MEASURABLY WRONG
+--------------------------------------------------------------------------
+The Mode control is now a three-item drop-down (kParamMode, id 3) rather than a two-state Monitor
+toggle: Generate + measure, Generate clock only, Monitor.
+
+THE IDEA WAS "A CLOCK FILTER WITHOUT THE ANALYSIS, TO SAVE CPU". THE SAVING DOES NOT EXIST.
+Benchmarked ms_detect_audio() on its own, 200000 blocks of 256 frames at 48 kHz, -O2:
+
+    231 ms of CPU for 1067 s of audio  =  0.022 % of one core
+    1.16 us per 256-frame block, against a block period of 5.333 ms
+
+One high pass, one envelope, one floor follower and two comparisons per sample; monitor_fit()'s
+least squares runs per ONSET, a handful of times a second. There is nothing to reclaim. Same shape
+as the jitter budget of the same day: the term that looked worth optimising was a rounding error
+against everything around it. Do not sell this mode as a CPU saving.
+
+WHAT IT ACTUALLY FIXES IS A PANEL THAT LIES, and that defect is real and reproducible:
+
+    mstDriver --realtime --seconds 10, silent input, clock into IAC, Generate + measure:
+        hits 0  missed 17  spurious 0
+
+Every 24th tick registers an expectation and ms_detect_audio() ages it out against silence, so a
+plug-in on a track the drum machine does NOT come back on counts a miss per beat - about 7800 an
+hour - and reads as a fault when nothing whatever is wrong. Once a device's latency is known, the
+everyday use of this plug-in is as a clock on whatever track suits, and that is now a mode. Same
+run in Generate clock only: 0 missed, 0 device lines logged, clock unaffected (313 ticks, 0 late,
+commit margin +12.7 ms mean / +9.4 ms worst).
+
+THE SAVED-STATE COMPATIBILITY IS FREE, AND ONLY BECAUSE OF THE ORDERING. The toggle wrote exactly
+0.0 or 1.0 into values[3]; with Measure at step 0 and Monitor at step 2, those are this parameter's
+first and last normalised values. Every set saved by the older build opens in the mode it was saved
+in with no migration branch. A fourth mode must therefore be inserted in the MIDDLE, never at
+either end.
+
+THE FIGURES ARE PRESERVED WHEN THE DETECTOR GOES QUIET, and every other source change still clears
+them (ms_detect_set_source). They are kept because the compensation dialled in on the panel came
+out of them, and a value in force with no visible provenance is worse than a dim number. Verified
+directly: after a run, -> eMsDetectOff preserved hits and mean, 400 further silent blocks added no
+misses, and -> eMsDetectFromClock cleared.
+
+A HELD FIGURE MUST NOT LOOK LIKE A LIVE ONE, and colour alone will not carry that. Four cues:
+  - the section heading gains "- HELD FROM THE LAST RUN"
+  - a line under it names the mode that would make it live again
+  - both text tiers drop together (MS_HELD_CAPTION / MS_HELD_FIGURE, about 2:1 contrast)
+  - the verdict loses its GREEN and gains "(held)" - it is the one thing on the panel a user reads
+    without reading, and a green EXCELLENT over a measurement that stopped ten minutes ago is the
+    worst single failure this panel could have
+
+THE SWEEP FOR INACTIVE FIGURES FOUND TWO EXISTING ONES THAT WERE WORSE THAN STALE:
+  - In monitor mode ms_clock_process() returns at the top with no destination and the stats are
+    reset on the way in, so Commit margin and Late clocks read a PERFECT 0.00 ms / 0 - the panel's
+    most reassuring possible reading, produced by sending nothing at all.
+  - The LATENCY BREAKDOWN in monitor mode divided every term by lead + roundTrip with roundTrip at
+    zero, so Schedule lead drew a full-width bar as 100 % of a "Total musical delay" of 10 ms that
+    nothing on the rig was waiting. It is now NOT APPLICABLE there.
+Host block jitter and Clock drift stay live in all three modes, and correctly so: ms_stats_block()
+runs before the clock and unconditionally, and drift is audio seconds against wall seconds.
+
 2026-09-02  CLOCK GENERATES CORRECTLY - AND NEEDS A LOOKAHEAD
 ------------------------------------------------------------
 src/msClock.c generating 24 PPQN from the host's ppq, sent through src/msMidi.c with a scheduled

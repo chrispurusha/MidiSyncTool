@@ -360,8 +360,21 @@ void ms_detect_reset(tMsDetect * detect) {
 }
 
 void ms_detect_set_source(tMsDetect * detect, tMsDetectSource source) {
-    if ((detect != NULL) && (detect->source != source)) {
-        detect->source = source;
+    if ((detect == NULL) || (detect->source == source)) {
+        return;
+    }
+    detect->source = source;
+
+    // GOING QUIET PRESERVES THE FIGURES; ANY OTHER CHANGE CLEARS THEM.
+    //
+    // Every other transition starts a different measurement - a monitor reading and a latency
+    // reading are not the same quantity and must never be averaged together - so the figures go.
+    // eMsDetectOff starts no measurement at all, which is exactly why the last run's numbers stay:
+    // they are what the compensation setting was derived from, and throwing them away would leave a
+    // value in force on the panel with nothing on screen saying where it came from.
+    //
+    // Leaving Off DOES clear, because that transition starts a run.
+    if (source != eMsDetectOff) {
         ms_detect_reset(detect);
     }
 }
@@ -448,6 +461,15 @@ void ms_detect_audio(tMsDetect *   detect,
                      double        sampleRate,
                      uint64_t      blockHostTime) {
     if ((detect == NULL) || (samples == NULL) || (frames == 0) || (sampleRate <= 0.0)) {
+        return;
+    }
+
+    // NOTHING IS LISTENED FOR WHEN NOTHING IS BEING MEASURED, and the early return is here rather
+    // than only at the call site because THE AGEING BELOW IS THE POINT. A detector that kept ageing
+    // expectations against silence would count a miss per beat for the whole session - see
+    // eMsDetectOff. The preserved figures also have to stay untouched, and every path below this
+    // line writes to them.
+    if (detect->source == eMsDetectOff) {
         return;
     }
 

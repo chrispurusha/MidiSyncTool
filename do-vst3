@@ -13,7 +13,8 @@ set -e
 
 SDK="${VST3_SDK:-$HOME/Documents/vst3sdk}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OUT="${MST_VST3_OUT:-$HERE/build/MidiSyncTool.vst3}"
+DEFAULT_OUT="$HERE/build/MidiSyncTool.vst3"
+OUT="${MST_VST3_OUT:-$DEFAULT_OUT}"
 BIN="$OUT/Contents/MacOS/MidiSyncTool"
 DEPLOYMENT_TARGET=11.5
 
@@ -27,6 +28,7 @@ C_SOURCES=(
     "$HERE/src/msLog.c"
     "$HERE/src/msMidi.c"
     "$HERE/src/msClock.c"
+    "$HERE/src/msClockIn.c"
     "$HERE/src/msStats.c"
     "$HERE/src/msDetect.c"
     "$HERE/src/msProbe.c"
@@ -178,9 +180,21 @@ print "Architectures: $(lipo -archs "$BIN")"
 INSTALL_DIR="${MST_VST3_INSTALL:-/Library/Audio/Plug-Ins/VST3}"
 INSTALLED="$INSTALL_DIR/$(basename "$OUT")"
 
+# A BUILD SENT SOMEWHERE ELSE IS NOT A BUILD TO INSTALL, and this guard exists because the omission
+# was made and did real damage. Building an old revision for an A/B with MST_VST3_OUT=/tmp/mst-old.vst3
+# and no MST_NO_INSTALL put a stale plug-in into /Library/Audio/Plug-Ins/VST3 as "mst-old.vst3" -
+# a DIFFERENT bundle name declaring the SAME VST3 class IDs as MidiSyncTool.vst3. A host indexes by
+# class id, so it then had two bundles claiming to be this plug-in and was free to load either.
+#
+# Naming the output explicitly always means "put it there, for a purpose of my own". Only the default
+# output is the developer's working copy, so only that one is installed.
 if [[ -n "$MST_NO_INSTALL" ]]; then
     print ""
     print "Not installed (MST_NO_INSTALL is set)."
+elif [[ "$OUT" != "$DEFAULT_OUT" ]]; then
+    print ""
+    print "Not installed: MST_VST3_OUT names a build of its own, not the working copy."
+    print "               (set MST_VST3_INSTALL if you really want it installed somewhere)"
 else
     rm -rf "$INSTALLED"
     cp -R "$OUT" "$INSTALL_DIR/" && print "Installed: $INSTALLED"

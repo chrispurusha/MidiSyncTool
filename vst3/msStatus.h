@@ -55,6 +55,11 @@ typedef struct {
     atomic_uint    lateTicks;
     _Atomic double blockPeriodRmsMs;
 
+    // HOW MANY INTERVALS WERE REJECTED AS SUSPENSIONS rather than measured - see MS_STATS_GAP_MS.
+    // Shown beside the jitter figure, never swallowed: a metric that silently drops its worst
+    // samples is a prettier lie than one that keeps them.
+    atomic_uint    blockGaps;
+
     // What is LEFT of that once the timebase model has absorbed what it can - the part the output
     // clock actually inherits. Shown beside the raw figure, because either number on its own says
     // nothing about whether the absorbing works.
@@ -90,13 +95,33 @@ typedef struct {
     _Atomic double inputPathMs;
     _Atomic double compensationMs;
 
-    // MONITOR MODE. Nothing is generated; the grid is fitted to the audio instead, so the round-trip
-    // figures above are meaningless and the panel must say so rather than show a stale number. The
-    // jitter and peak deviation ARE valid - they are the residual about the fitted line.
-    atomic_int     monitorMode;
+    // WHICH MODE, as a tMsMode - and it is the panel's licence to draw a figure as live, as HELD or
+    // as a dash. Not every number on the panel means something in every mode: in monitor nothing is
+    // generated, so the round trip has no reference and the latency breakdown has nothing to break
+    // down; in clock only nothing is listened for, so every measured figure is the last run's.
+    // Showing any of those the way a live reading is shown is how a stale number gets written down
+    // as a measurement an hour later.
+    atomic_int     mode;
     _Atomic double monitorPeriodMs;
     _Atomic double monitorBpm;
     atomic_uint    monitorOnsets;
+
+    // ---- THE CLOCK COMING IN, which is measured and never acted on ------------------------
+    //
+    // Deliberately separate from every figure above. Those describe a clock this plug-in generated
+    // against a timebase it owns; these describe someone else's clock arriving on a wire, and the
+    // only thing the two share is the panel they are drawn on. Mixing them would invite exactly the
+    // comparison that has to be made carefully or not at all.
+    atomic_int     haveClockSource;
+    char           clockSourceName[128];
+    _Atomic double clockInBpm;
+    _Atomic double clockInPeriodMs;
+    _Atomic double clockInJitterMs;
+    _Atomic double clockInPeakDevMs;
+    atomic_uint    clockInFitted;
+    atomic_uint    clockInClocks;
+    atomic_uint    clockInGaps;
+    atomic_int     clockInRunning;
 
     atomic_int     probeRunning;
     atomic_int     historyWrite;

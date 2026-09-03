@@ -37,6 +37,7 @@
 #include <CoreAudio/HostTime.h>
 
 #include "msClock.h"
+#include "msClockIn.h"
 #include "msLog.h"
 #include "msDetect.h"
 #include "msMidi.h"
@@ -114,11 +115,28 @@ enum {
     kParamMidiDest = 0,      // 0 = none, 1..n = the nth destination
     kParamCompensate,        // device latency to compensate, in milliseconds
     kParamAudioSource,       // which of the channels the host hands us to analyse
-    kParamMonitor,           // 0 = generate clock, 1 = listen only and fit a grid to the audio
+    kParamMode,              // tMsMode - generate + measure, generate only, or monitor
+
+    // APPENDED, NEVER INSERTED. A parameter's id is what a host's automation and a saved project
+    // are expressed in, so the four above keep the ids they were released with and anything new
+    // goes on the end. A shorter state block simply leaves this at "none", which is right.
+    kParamClockSource,       // 0 = none, 1..n = the nth MIDI SOURCE to measure
     kParamCount
 };
 
 #define MST_COMPENSATE_MAX    (100.0)    // ms; well past anything a drum machine has shown
+
+// HOW MANY PARAMETERS THE ORIGINAL STATE BLOCK HELD, and it must never change.
+//
+// The block is [N doubles][destination name]. A fifth parameter CANNOT simply extend that array: an
+// old block is 4 doubles followed immediately by 64 bytes of name, so reading 5 doubles from it
+// succeeds - and quietly loads the first eight characters of the port's NAME as a parameter value.
+// The read would not fail, it would not be short, and the plug-in would come up listening to
+// whatever "IAC Driv" happens to normalise to.
+//
+// So everything new goes on the END of the block, after the name, where an old file simply runs out
+// and the short read leaves the default in place. See setState().
+#define MST_STATE_V1_PARAMS   (4)
 
 // SLOT 0 IS NONE, deliberately and permanently. A plug-in that picks a destination on your behalf
 // ends up driving hardware nobody asked it to - the rule GenBridge arrived at the hard way.
@@ -130,6 +148,20 @@ static inline int mst_dest_slot(double normalized) {
 
 static inline double mst_dest_normalized(int slot) {
     return (double)slot / (double)MS_MIDI_MAX_DEST;
+}
+
+// The same arithmetic for the SOURCE list, which is a different list of a different length. Slot 0
+// is None here for a milder reason than on the destination side - listening to something uninvited
+// harms nothing - but a plug-in that picked a master on your behalf would still be reporting a tempo
+// nobody asked it to measure.
+static inline int mst_source_slot(double normalized) {
+    int slot = (int)(normalized * (double)MS_MIDI_MAX_SOURCE + 0.5);
+
+    return (slot < 0) ? 0 : ((slot > MS_MIDI_MAX_SOURCE) ? MS_MIDI_MAX_SOURCE : slot);
+}
+
+static inline double mst_source_normalized(int slot) {
+    return (double)slot / (double)MS_MIDI_MAX_SOURCE;
 }
 
 class MstProcessor : public IComponent,
@@ -254,6 +286,12 @@ public:
         // initialising costs nothing.
         stats        = ms_stats_create();
         detect       = ms_detect_create();
+        clockIn      = ms_clock_in_create();
+
+        // THE LISTENER IS REGISTERED ONCE AND STAYS REGISTERED. What decides whether anything
+        // arrives is which source is connected, not whether a callback is installed - so there is
+        // one place that can be wrong rather than two that have to agree.
+        ms_midi_set_listener(clock_in_byte, this);
         clock.stats  = stats;
         clock.detect = detect;
 
@@ -352,6 +390,14 @@ public:
         clock.stats  = nullptr;
         clock.detect = nullptr;
         ms_stats_destroy(stats);
+        // THE LISTENER GOES FIRST, and the source with it. It runs on CoreMIDI's thread and holds a
+        // pointer to this object; leaving it connected while the estimator underneath it is freed is
+        // a use-after-free waiting for the next clock byte to arrive.
+        ms_midi_set_listener(nullptr, nullptr);
+        ms_midi_listen(-1);
+        ms_clock_in_destroy(clockIn);
+        clockIn = nullptr;
+
         ms_detect_destroy(detect);
         stats  = nullptr;
         detect = nullptr;
@@ -401,7 +447,18 @@ public:
         ms_log_line("setActive(%d)", (int)state);
         blocksSeen = 0;
         lastLogged = -1.0;
+        suspend();
         return kResultOk;
+    }
+
+    // NOTHING BETWEEN TWO BLOCKS IS A BLOCK PERIOD once the host has stopped feeding us. Both the
+    // block-period RMS and the timebase model measure a STEP from the previous sample, so both have
+    // to be told that the next one does not follow the last. Neither figure is cleared - the run's
+    // history is still the run's history - only the stale timestamp behind it.
+    void suspend(void) {
+        ms_stats_gap(stats);
+        clock.haveBase = false;
+        clock.havePrev = false;
     }
 
     // THE PROJECT MUST REMEMBER THE PORT, or every reopened set is silent until someone notices.
@@ -411,7 +468,7 @@ public:
         if (stream == nullptr) {
             return kResultOk;
         }
-        double values[kParamCount] = { 0.0, 0.0, 0.0, 0.0 };
+        double values[MST_STATE_V1_PARAMS] = { 0.0, 0.0, 0.0, 0.0 };
         int32  read = 0;
 
         stream->read(values, (int32)sizeof(values), &read);
@@ -428,10 +485,14 @@ public:
             apply_parameter(kParamAudioSource, values[2]);
         }
 
-        // A STATE BLOCK FROM AN OLDER BUILD IS SHORTER and simply stops here, leaving monitor mode
-        // off - which is the right default for a set saved before the mode existed.
+        // A STATE BLOCK FROM AN OLDER BUILD IS SHORTER and simply stops here, leaving the mode at
+        // Generate + measure - the right default for a set saved before the mode existed.
+        //
+        // A BLOCK FROM THE TWO-STATE TOGGLE BUILD IS THE SAME LENGTH and needs no migration: it
+        // wrote 0.0 for generate and 1.0 for monitor, which are exactly this parameter's first and
+        // last steps. See the ordering note on tMsMode.
         if (read >= (int32)(4 * sizeof(double))) {
-            apply_parameter(kParamMonitor, values[3]);
+            apply_parameter(kParamMode, values[3]);
         }
         char name[MS_MIDI_NAME_LEN] = {0};
 
@@ -460,6 +521,38 @@ public:
                 ms_log_line("saved destination '%s' is not present - generating nothing", name);
             }
         }
+
+        // ---- ANYTHING ADDED AFTER v1 LIVES HERE, past the name -------------------------------
+        //
+        // An older block has run out by this point, so both reads come back short and the defaults
+        // stand: no clock source, which is right for a set saved before there was one.
+        double clockSource = 0.0;
+
+        read = 0;
+        stream->read(&clockSource, (int32)sizeof(clockSource), &read);
+
+        if (read >= (int32)sizeof(double)) {
+            apply_parameter(kParamClockSource, clockSource);
+        }
+        char sourceName[MS_MIDI_NAME_LEN] = {0};
+
+        read = 0;
+        stream->read(sourceName, (int32)sizeof(sourceName), &read);
+
+        // THE NAME WINS OVER THE INDEX, for the same reason it does on the destination side: a
+        // source's index moves with whatever else is switched on that day.
+        if ((read > 0) && (sourceName[0] != '\0')) {
+            sourceName[sizeof(sourceName) - 1] = '\0';
+
+            int index = ms_midi_source_index_for_name(sourceName);
+
+            if (index >= 0) {
+                apply_parameter(kParamClockSource, mst_source_normalized(index + 1));
+            } else {
+                apply_parameter(kParamClockSource, 0.0);
+                ms_log_line("saved clock source '%s' is not present - measuring nothing", sourceName);
+            }
+        }
         return kResultOk;
     }
 
@@ -467,7 +560,9 @@ public:
         if (stream == nullptr) {
             return kResultOk;
         }
-        double values[kParamCount] = { paramDest, paramCompensate, paramAudioSource, paramMonitor };
+        // THE FIRST FOUR ONLY. See MST_STATE_V1_PARAMS: the block's shape up to and including the
+        // destination name is frozen, and everything since goes on the end.
+        double values[MST_STATE_V1_PARAMS] = { paramDest, paramCompensate, paramAudioSource, paramMode };
         int32  written = 0;
 
         stream->write(values, (int32)sizeof(values), &written);
@@ -486,6 +581,17 @@ public:
             ms_midi_name(clock.destination, name, sizeof(name));
         }
         stream->write(name, (int32)sizeof(name), &written);
+
+        // ---- past the name: everything added after v1 -----------------------------------------
+        stream->write(&paramClockSource, (int32)sizeof(paramClockSource), &written);
+
+        char sourceName[MS_MIDI_NAME_LEN] = {0};
+        int  listening = ms_midi_listening();
+
+        if (listening >= 0) {
+            ms_midi_source_name(listening, sourceName, sizeof(sourceName));
+        }
+        stream->write(sourceName, (int32)sizeof(sourceName), &written);
         return kResultOk;
     }
 
@@ -507,30 +613,49 @@ public:
     }
 
     void refresh_destination(void) {
-        int port = monitorMode ? -1 : selectedPort;
+        int port = (mode == eMsModeMonitor) ? -1 : selectedPort;
 
         clock.destination = port;
         probe.destination = port;
     }
 
-    void apply_parameter(int id, double normalized) {
-        if (id == kParamMonitor) {
-            paramMonitor = normalized;
-            monitorMode  = (normalized >= 0.5);
+    // ON CoreMIDI'S RECEIVE THREAD. Straight through to the estimator, which owns everything it
+    // touches - no lock, no allocation, and deliberately nothing that reaches into the processor.
+    static void clock_in_byte(uint8_t status, uint64_t hostTime, void * user) {
+        MstProcessor * self = (MstProcessor *)user;
 
-            // Switching source resets the detector's figures, which is right: a monitor reading and
-            // a latency reading are not the same measurement and must never be averaged together.
-            ms_detect_set_source(detect, monitorMode ? eMsDetectMonitor : eMsDetectFromClock);
-            ms_stats_reset(stats);
+        if ((self != nullptr) && (self->clockIn != nullptr)) {
+            ms_clock_in_byte(self->clockIn, status, hostTime);
+        }
+    }
+
+    void apply_parameter(int id, double normalized) {
+        if (id == kParamMode) {
+            tMsMode previous = mode;
+
+            paramMode = normalized;
+            mode      = ms_mode_from_normalized(normalized);
+
+            // WHICH SOURCE EACH MODE IMPLIES, in one place. eMsDetectOff preserves the figures and
+            // every other transition clears them - see ms_detect_set_source().
+            ms_detect_set_source(detect, (mode == eMsModeMonitor)   ? eMsDetectMonitor
+                                       : (mode == eMsModeClockOnly) ? eMsDetectOff
+                                                                    : eMsDetectFromClock);
+
+            // THE HOST-TIMING STATS ARE RESET ONLY WHEN THE CLOCK ITSELF STARTS OR STOPS, which is
+            // the monitor boundary and nothing else. Block jitter, the model residual and the commit
+            // margin stay live and meaningful in clock-only mode - it is still generating - so
+            // clearing them on the way in would throw away a settled run for no reason.
+            if ((mode == eMsModeMonitor) != (previous == eMsModeMonitor)) {
+                ms_stats_reset(stats);
+            }
             refresh_destination();
 
             if (status != nullptr) {
-                atomic_store(&status->monitorMode, monitorMode ? 1 : 0);
+                atomic_store(&status->mode, (int)mode);
                 atomic_store(&status->haveDestination, (clock.destination >= 0) ? 1 : 0);
             }
-            ms_log_line("monitor mode %s - %s", monitorMode ? "ON" : "off",
-                        monitorMode ? "listening only, grid fitted to the audio"
-                                    : "generating clock again");
+            ms_log_line("mode -> %s", ms_mode_label(mode));
         } else if (id == kParamMidiDest) {
             paramDest = normalized;
 
@@ -551,6 +676,21 @@ public:
             }
             ms_log_line("destination parameter -> slot %d (%s)", slot,
                         (clock.destination >= 0) ? status->destName : "none");
+        } else if (id == kParamClockSource) {
+            paramClockSource = normalized;
+
+            int slot = mst_source_slot(normalized);
+            int port = ((slot >= 1) && ((slot - 1) < ms_midi_source_count())) ? (slot - 1) : -1;
+
+            // A NEW SOURCE IS A NEW MEASUREMENT. Carrying a fitted rate across from a different
+            // master would be a reading of neither, and the two could be tens of ppm apart.
+            ms_clock_in_reset(clockIn);
+            ms_midi_listen(port);
+
+            if (status != nullptr) {
+                atomic_store(&status->haveClockSource, (port >= 0) ? 1 : 0);
+                ms_midi_source_name(port, status->clockSourceName, sizeof(status->clockSourceName));
+            }
         } else if (id == kParamAudioSource) {
             paramAudioSource = normalized;
         } else if (id == kParamCompensate) {
@@ -627,6 +767,7 @@ public:
     // because it brackets every run of process() calls and makes the log readable.
     tresult PLUGIN_API setProcessing(TBool state) SMTG_OVERRIDE {
         ms_log_line("setProcessing(%d)", (int)state);
+        suspend();
         return kResultOk;
     }
 
@@ -699,7 +840,14 @@ public:
 
         // THE PROBE, which sends nothing unless a run is armed. Ahead of the clock only because a
         // calibration run is the more time-critical of the two while it lasts.
-        ms_probe_process(&probe, detect, (uint32_t)data.numSamples, sampleRate, hostNow);
+        //
+        // NOT IN A MODE THAT CANNOT HEAR THE ANSWER. ms_probe_process() registers an expectation for
+        // every note it sends by calling ms_detect_expect() directly, which has no source guard of
+        // its own - so a run left armed from before the mode changed would queue expectations that
+        // nothing will ever match, and count each one as a miss.
+        if (mode == eMsModeMeasure) {
+            ms_probe_process(&probe, detect, (uint32_t)data.numSamples, sampleRate, hostNow);
+        }
 
         // THE CLOCK, before any logging: the ticks in this block belong to the wall time just read,
         // and every microsecond spent deciding what to log first is a microsecond of avoidable
@@ -721,7 +869,11 @@ public:
         //
         // The LEFT channel only. A transient is a transient on either, and summing would let a
         // stereo hit's own channel-to-channel delay smear the onset.
-        if ((data.numInputs > 0) && (data.inputs != nullptr)
+        // AND NOT AT ALL IN CLOCK-ONLY MODE. ms_detect_audio() would return immediately anyway - the
+        // invariant lives there, where the expectation ageing it protects is - but the channel choice
+        // and the stereo sum above it are real work done for an answer nobody asked for.
+        if ((mode != eMsModeClockOnly)
+            && (data.numInputs > 0) && (data.inputs != nullptr)
             && (data.inputs[0].numChannels > 0)
             && (data.inputs[0].channelBuffers32 != nullptr)
             && (data.inputs[0].channelBuffers32[0] != nullptr)) {
@@ -773,6 +925,7 @@ public:
             atomic_store(&status->commitMarginMinMs,  snap.marginMinMs);
             atomic_store(&status->lateTicks,          (unsigned)snap.lateTicks);
             atomic_store(&status->blockPeriodRmsMs,   snap.blockPeriodRmsMs);
+            atomic_store(&status->blockGaps,          (unsigned)snap.blockGaps);
             atomic_store(&status->residualRmsMs,       ms_clock_residual_ms(&clock));
             atomic_store(&status->modelResyncs,        (unsigned)clock.modelResyncs);
             atomic_store(&status->driftPpm,           snap.driftPpm);
@@ -804,6 +957,21 @@ public:
                          (sampleRate > 0.0) ? (((double)data.numSamples / sampleRate) * 1000.0) : 0.0);
             atomic_store(&status->compensationMs, clock.compensationMs);
             atomic_store(&status->probeRunning,   ms_probe_running(&probe) ? 1 : 0);
+
+            // THE INCOMING CLOCK, read from the estimator's published snapshot. Nothing here is
+            // computed on this thread - the CoreMIDI thread owns all of it and this only forwards
+            // what it last published.
+            tMsClockInSnapshot in;
+
+            ms_clock_in_read(clockIn, &in);
+            atomic_store(&status->clockInBpm,       in.bpm);
+            atomic_store(&status->clockInPeriodMs,  in.periodMs);
+            atomic_store(&status->clockInJitterMs,  in.jitterRmsMs);
+            atomic_store(&status->clockInPeakDevMs, in.peakDevMs);
+            atomic_store(&status->clockInFitted,    (unsigned)in.fitted);
+            atomic_store(&status->clockInClocks,    (unsigned)in.clocks);
+            atomic_store(&status->clockInGaps,      (unsigned)in.gaps);
+            atomic_store(&status->clockInRunning,   in.running ? 1 : 0);
 
             // ONE POINT PER DETECTION, not one per block. The graph is of what the hardware did, so
             // its x axis is hits - a block-rate trace would be a flat line with a step in it.
@@ -877,7 +1045,7 @@ public:
 
             ms_detect_read(detect, &hit);
 
-            if (monitorMode) {
+            if (mode == eMsModeMonitor) {
                 // NO LATENCY LINE IN MONITOR MODE. There is no reference for a transient to be late
                 // against, so the only honest figures are the fitted grid and the spread about it.
                 if (hit.monitorOnsets > 0) {
@@ -888,6 +1056,11 @@ public:
                                 (unsigned long long)hit.monitorOnsets,
                                 (unsigned long long)hit.missed, hit.inputPeak);
                 }
+            } else if (mode == eMsModeClockOnly) {
+                // NOTHING IS BEING MEASURED, so nothing is reported. The figures still in the
+                // snapshot are the last run's and are preserved on purpose, but this log is a live
+                // trace: reprinting a held number on every heartbeat is how it ends up in a
+                // notebook as this session's measurement.
             } else if ((hit.hits > 0) || (hit.missed > 0) || (hit.spurious > 0)) {
                 // ROUND TRIP, and labelled as such - it still contains the interface's A/D and the
                 // host's input buffering. See the note at the top of msDetect.h.
@@ -909,11 +1082,12 @@ public:
             // silent plug-in would be looking at.
             if (snap.windowSeconds > 0.0) {
                 ms_log_line("  timing | commit margin mean %+.3f min %+.3f RMS %.3f ms | late %llu/%llu"
-                            " | block period RMS %.3f worst %+.3f ms | drift %+.1f ppm"
+                            " | block period RMS %.3f worst %+.3f ms | %llu gap(s) | drift %+.1f ppm"
                             " | BPM host %.4f measured %.4f over %.1f s",
                             snap.marginMeanMs, snap.marginMinMs, snap.marginRmsMs,
                             (unsigned long long)snap.lateTicks, (unsigned long long)snap.ticks,
-                            snap.blockPeriodRmsMs, snap.blockPeriodWorstMs, snap.driftPpm,
+                            snap.blockPeriodRmsMs, snap.blockPeriodWorstMs,
+                            (unsigned long long)snap.blockGaps, snap.driftPpm,
                             snap.hostBpm, snap.measuredBpm, snap.windowSeconds);
 
                 // THE PAIR, AND THE RESYNC COUNT, ON ONE LINE. A residual on its own says nothing:
@@ -934,6 +1108,24 @@ public:
                             ms_clock_residual_worst_ms(&clock),
                             (unsigned long long)clock.modelResyncs,
                             (unsigned long long)clock.modelBlocks);
+
+                // THE INCOMING CLOCK, on the same heartbeat and only once there is a source. The
+                // ppm column is the one worth reading: it is this plug-in's generated clock and the
+                // measured one expressed against the host's own tempo, which is the only form in
+                // which a difference in the fourth decimal place of a BPM is legible.
+                tMsClockInSnapshot in;
+
+                ms_clock_in_read(clockIn, &in);
+
+                if (ms_midi_listening() >= 0) {
+                    ms_log_line("  clk in | %.4f BPM (%.4f ms/clock) | jitter RMS %.4f peak dev %.4f ms"
+                                " | %u fitted | %s | %llu clock(s) %llu gap(s) | vs host %+.1f ppm",
+                                in.bpm, in.periodMs, in.jitterRmsMs, in.peakDevMs, in.fitted,
+                                in.running ? "RUNNING" : "stopped",
+                                (unsigned long long)in.clocks, (unsigned long long)in.gaps,
+                                ((snap.hostBpm > 0.0) && (in.bpm > 0.0))
+                                    ? (((in.bpm / snap.hostBpm) - 1.0) * 1.0e6) : 0.0);
+                }
 
                 // THE BLOCK SIZE, reported whenever the host is not handing over a constant one.
                 // Every per-block figure above assumes it is, and Live does not - so a varying size
@@ -968,8 +1160,10 @@ private:
     double             paramDest = 0.0;
     double             paramCompensate = 0.0;
     double             paramAudioSource = 0.0;
-    double             paramMonitor = 0.0;
-    bool               monitorMode = false;
+    double             paramMode = 0.0;
+    tMsMode            mode      = eMsModeMeasure;
+    double             paramClockSource = 0.0;
+    tMsClockIn *       clockIn    = nullptr;
     int                selectedPort = -1;   // the port CHOSEN, before monitor mode gates it
     float              sumBuffer[8192];
     int                statusSlot = -1;
@@ -1075,10 +1269,15 @@ public:
             copy_string(info.shortTitle, "Comp");
             copy_string(info.units, "ms");
             info.flags = ParameterInfo::kCanAutomate;
-        } else if (index == kParamMonitor) {
-            copy_string(info.title, "Monitor only");
-            copy_string(info.shortTitle, "Monitor");
-            info.stepCount = 1;   // a toggle
+        } else if (index == kParamMode) {
+            copy_string(info.title, "Mode");
+            copy_string(info.shortTitle, "Mode");
+            info.stepCount = eMsModeCount - 1;
+            info.flags     = ParameterInfo::kCanAutomate | ParameterInfo::kIsList;
+        } else if (index == kParamClockSource) {
+            copy_string(info.title, "Clock input");
+            copy_string(info.shortTitle, "Clock in");
+            info.stepCount = MS_MIDI_MAX_SOURCE;
             info.flags     = ParameterInfo::kCanAutomate | ParameterInfo::kIsList;
         } else {
             copy_string(info.title, "Analyse channel");
@@ -1104,8 +1303,20 @@ public:
             }
         } else if (id == kParamCompensate) {
             snprintf(text, sizeof(text), "%.1f ms", value * MST_COMPENSATE_MAX);
-        } else if (id == kParamMonitor) {
-            snprintf(text, sizeof(text), "%s", (value >= 0.5) ? "monitor" : "generate");
+        } else if (id == kParamMode) {
+            static const char * names[eMsModeCount] = { "generate + measure", "clock only", "monitor" };
+
+            snprintf(text, sizeof(text), "%s", names[(int)ms_mode_from_normalized(value)]);
+        } else if (id == kParamClockSource) {
+            int slot = mst_source_slot(value);
+
+            if (slot <= 0) {
+                snprintf(text, sizeof(text), "none");
+            } else if ((slot - 1) < ms_midi_source_count()) {
+                ms_midi_source_name(slot - 1, text, sizeof(text));
+            } else {
+                snprintf(text, sizeof(text), "-");
+            }
         } else {
             static const char * names[MS_AUDIO_SOURCES] = { "left", "right", "left + right" };
             int index = (int)((value * (double)(MS_AUDIO_SOURCES - 1)) + 0.5);
@@ -1148,15 +1359,31 @@ public:
         if (stream == nullptr) {
             return kResultOk;
         }
-        double stored[kParamCount] = { 0.0, 0.0, 0.0 };
+        // THE SAME LAYOUT THE PROCESSOR WRITES, read the same way - see MST_STATE_V1_PARAMS. If
+        // this read five doubles in one go it would take the first eight bytes of the destination
+        // NAME as the fifth parameter, and the controller and the processor would then disagree
+        // about what the plug-in is set to, with only the controller's version on screen.
+        double stored[MST_STATE_V1_PARAMS] = { 0.0, 0.0, 0.0, 0.0 };
         int32  read = 0;
 
         stream->read(stored, (int32)sizeof(stored), &read);
 
-        for (int i = 0; i < kParamCount; i++) {
+        for (int i = 0; i < MST_STATE_V1_PARAMS; i++) {
             if (read >= (int32)((i + 1) * sizeof(double))) {
                 values[i] = stored[i];
             }
+        }
+        char   name[MS_MIDI_NAME_LEN] = {0};
+        double clockSource = 0.0;
+
+        read = 0;
+        stream->read(name, (int32)sizeof(name), &read);
+
+        read = 0;
+        stream->read(&clockSource, (int32)sizeof(clockSource), &read);
+
+        if (read >= (int32)sizeof(double)) {
+            values[kParamClockSource] = clockSource;
         }
         return kResultOk;
     }
@@ -1185,7 +1412,7 @@ private:
     IConnectionPoint *  peer       = nullptr;
     IComponentHandler * handler    = nullptr;
     IPlugView *         editorView = nullptr;
-    double              values[kParamCount] = { 0.0, 0.0, 0.0 };
+    double              values[kParamCount] = { 0.0, 0.0, 0.0, 0.0, 0.0 };
     int                 statusSlot = -1;
 };
 

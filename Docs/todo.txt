@@ -8,7 +8,8 @@ Open decisions (see Docs/design.md)
 
 - Does phase 1 need an audio input bus at all, or only from section 3 onward? Registering as an Fx from the start costs nothing and keeps it open
 - Should MIDI clock run while the transport is stopped - always, never, or a setting?
-- Monitor-only mode's reference: an incoming MIDI clock on a chosen source, the host, or either? Decides whether MIDI input lands in phase 1
+- Monitor-only mode's reference: PARTLY ANSWERED 2026-09-03 - a MIDI clock input is now its own measurement (CLOCK INPUT section), separate from monitor mode's audio grid, and both can run at once. Still open is whether monitor mode should PREFER the MIDI clock as its reference when one is present
+- Should the clock input drive the generated clock - a PLL that re-clocks an external master, the concept's section 2? Deliberately not built: measure first, and read the numbers before steering anything from them
 - Does the timestamped MIDI send primitive go into SynthLib (all four projects benefit) or stay local until it settles?
 
 Build
@@ -24,7 +25,7 @@ Build
 - The first L + D of a run is uncompensated because the grid cannot be advanced before the transport starts; consider a pre-roll if it ever matters
 - Subtract the constant audio-path terms so the figure can be called device latency rather than round trip - msDevice.c already reports them
 - DECISIVE TEST for the Cirklon result: clock to the Elektron TM-1 (USB-to-DIN), DIN straight into the Tempest, no re-clocking sequencer. ~0.113 ms means the DIN hop did it and the Tempest's USB input was the jitter source; ~0.182 ms means the Cirklon's re-clocking did it
-- MEASURE LIVE'S NATIVE CLOCK ON THE WIRE: point Live's Sync at IAC, plug-in in Monitor, time arrivals with the same listener that gave ours 0.0134 ms - then ours the same way. The only defensible answer to "how much better is our clock", and about five minutes of work
+- MEASURE LIVE'S NATIVE CLOCK ON THE WIRE - the machinery now exists (Clock in row, findings 2026-09-03), the measurement does not: point Live's Sync at IAC, point Clock in at the same port, read the jitter; then ours the same way. The only defensible answer to "how much better is our clock"
 - A/B direct to the Tempest over USB with the Cirklon OUT of the path: the only configuration where the filtering can show its worth without a re-clocker absorbing the difference first
 - Repeat the A/B rows 3 and 4 of Docs/measurements.md - a 0.010 ms difference rests on one run each
 - Re-measure the Tempest self-clocked case with the FIXED fit (its 0.132 ms was taken with the ordinal-index version; peak-to-RMS of 2:1 says no hits were dropped, but it should be confirmed)
