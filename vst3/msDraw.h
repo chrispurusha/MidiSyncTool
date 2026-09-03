@@ -22,13 +22,24 @@ extern "C" {
 // gives us, so the panel is the same shape at any window size.
 #define MS_CANVAS_W    (560.0)
 // TALL ENOUGH FOR WHAT IS ON IT. The content ran to about 740 units while this said 600, which put
-// the graph off the bottom of the window - and the graph is now anchored to the canvas bottom rather
-// than to the running y, so a row added above it can crowd the layout but can never push it off
-// again. A collision is visible; a control drawn past the edge is not.
-// TALLER AGAIN for the CLOCK INPUT section (2026-09-03). The graph is anchored to the bottom, so
-// content added above it crowds the layout rather than pushing anything off the edge - a collision
-// is visible and a control drawn past the edge is not - but the room still has to exist.
-#define MS_CANVAS_H    (920.0)
+// the graph off the bottom of the window.
+//
+// THE GRAPH NO LONGER HANGS OFF THIS NUMBER (2026-09-03). It was anchored to the canvas bottom so a
+// row added above could never push it off the edge; what that actually did was leave the sections'
+// own variation - a clock source chosen or not, a held run, the dropout and split rows, some 130
+// units between them - on screen as a hole under the latency breakdown. The graph now follows the
+// content and spends the remainder on its own height, so this only has to be big enough for the
+// TALLEST arrangement plus a minimum trace: 758 units of content, then 26 + 20 to the graph's top
+// and MS_GRAPH_MIN_H + caption + margin below it. Too tall costs a taller trace, not a gap.
+#define MS_CANVAS_H    (890.0)
+
+// The trace's own geometry. MIN is what guarantees a crowded panel collides visibly instead of
+// drawing off the edge; MAX stops a short arrangement - clock-only with no source chosen and
+// nothing measured - handing a third of the panel to a scrolling line.
+#define MS_GRAPH_MIN_H       (70.0)
+#define MS_GRAPH_MAX_H       (150.0)
+#define MS_GRAPH_CAPTION_H   (14.0)
+#define MS_GRAPH_MARGIN_H    (14.0)
 
 // A click landed on a control the HOST must be told about, because these are VST3 parameters and
 // changing one behind the host's back would leave its automation and its saved state wrong.

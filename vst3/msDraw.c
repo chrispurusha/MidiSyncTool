@@ -666,14 +666,34 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
     // a steady host, or a host that stalled twice and had it quietly discounted.
     unsigned gaps    = (unsigned)atomic_load(&status->blockGaps);
 
+    // THE WORST CASE TRAVELS WITH THE RMS. The RMS is an all-time sum and moves slowly, so a fault
+    // that happens once per loop and a host that is mildly unsteady all the time look alike in it;
+    // the worst case separates them at a glance. It is also the number a split block used to land a
+    // whole buffer in, which is the reading this row exists to make legible.
     if (gaps > 0) {
-        snprintf(buffer, sizeof(buffer), "%.3f ms RMS  (%u gap%s ignored)",
-                 atomic_load(&status->blockPeriodRmsMs), gaps, (gaps == 1) ? "" : "s");
+        snprintf(buffer, sizeof(buffer), "%.3f ms RMS  (worst %+.3f, %u gap%s ignored)",
+                 atomic_load(&status->blockPeriodRmsMs),
+                 atomic_load(&status->blockPeriodWorstMs), gaps, (gaps == 1) ? "" : "s");
     } else {
-        snprintf(buffer, sizeof(buffer), "%.3f ms RMS", atomic_load(&status->blockPeriodRmsMs));
+        snprintf(buffer, sizeof(buffer), "%.3f ms RMS  (worst %+.3f)",
+                 atomic_load(&status->blockPeriodRmsMs),
+                 atomic_load(&status->blockPeriodWorstMs));
     }
     stat(28.0, y, "Host block jitter", buffer);
     y          += 16.0;
+
+    // ONLY WHEN IT HAPPENS, because on a host that does not split there is nothing to say and a
+    // permanent "0" would read as a fault waiting to happen. When it does happen it belongs here:
+    // it is the host's own behaviour at a loop boundary, it is corrected for rather than measured
+    // as jitter (see the note in msVst3.cpp's process()), and a reader comparing this figure with
+    // an older session's needs to know which of the two builds produced it.
+    unsigned splits  = (unsigned)atomic_load(&status->blockSplits);
+
+    if (splits > 0) {
+        snprintf(buffer, sizeof(buffer), "%u - one cycle in two calls, corrected", splits);
+        stat(28.0, y, "  host split blocks", buffer);
+        y += 16.0;
+    }
 
     unsigned resyncs = (unsigned)atomic_load(&status->modelResyncs);
 
@@ -911,9 +931,28 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
 
     // ---- the verdict and the trace ----
     //
-    // ANCHORED TO THE BOTTOM OF THE CANVAS, not to the running y. See MS_CANVAS_H.
-    double       graphY   = MS_CANVAS_H - 96.0;
-    double       verdictY = graphY - 20.0;
+    // THE TRACE FOLLOWS THE CONTENT AND SPENDS WHAT IS LEFT ON ITS OWN HEIGHT.
+    //
+    // It used to be anchored to the canvas bottom, so that a row added above could never push it
+    // off the edge. That guarantee is kept - the HEIGHT is what absorbs a taller panel now, and it
+    // is floored so a collision would still be visible rather than silently off-screen - but the
+    // anchor put the sections' own variation on screen as a hole. The content above ends anywhere
+    // across some 130 units depending on whether a clock source is chosen, whether the run is held,
+    // whether the dropout and split rows are showing; every one of those left exactly that much
+    // blank between the breakdown and the graph.
+    //
+    // Leftover now collects at the BOTTOM EDGE, where it reads as margin, instead of in the middle,
+    // where it reads as a bug. MS_CANVAS_H is therefore no longer a number the layout is sensitive
+    // to: too tall only makes the trace taller, up to the cap.
+    double       verdictY = y + 26.0;
+    double       graphY   = verdictY + 20.0;
+    double       graphH   = (MS_CANVAS_H - MS_GRAPH_CAPTION_H - MS_GRAPH_MARGIN_H) - graphY;
+
+    if (graphH < MS_GRAPH_MIN_H) {
+        graphH = MS_GRAPH_MIN_H;
+    } else if (graphH > MS_GRAPH_MAX_H) {
+        graphH = MS_GRAPH_MAX_H;
+    }
 
     // THE VERDICT LOSES ITS COLOUR WHEN IT IS HELD, and that matters more than any other figure on
     // the panel: a green EXCELLENT is the one thing here that a user reads without reading, and a
@@ -936,10 +975,10 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
                    : (tRgb){0.90, 0.35, 0.25});
     render_text(mainArea, (tRectangle){{20.0 + STAT_VALUE_DX, verdictY}, {0.0, 12.0}}, verdictText);
 
-    graph(28.0, graphY, 504.0, 70.0, status, verdictLive);
+    graph(28.0, graphY, 504.0, graphH, status, verdictLive);
 
     set_rgb_colour(verdictLive ? (tRgb)MS_CAPTION_GREY : (tRgb)MS_HELD_CAPTION);
-    render_text(mainArea, (tRectangle){{28.0, graphY + 74.0}, {0.0, 10.0}},
+    render_text(mainArea, (tRectangle){{28.0, graphY + graphH + 4.0}, {0.0, 10.0}},
                 verdictLive ? "deviation from the mean round trip"
                             : "deviation from the mean round trip - frozen, nothing is being measured");
 

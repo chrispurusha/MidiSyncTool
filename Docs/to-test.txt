@@ -3,6 +3,23 @@ MidiSyncTool TO TEST
 Finished code that is built but not yet checked against a real host.
 Confirmed -> delete the line. Check failed -> move it to todo.txt.
 
+- THE SPLIT-BLOCK FIX AT A LOOP BOUNDARY (2026-09-03), and the reading that settles it. Set a 512
+  frame buffer, loop a bar, play for a few minutes and watch "Host block jitter". THE NUMBER TO
+  READ IS THE WORST CASE BESIDE THE RMS, not the RMS: before the fix it walked up towards a whole
+  buffer (measured -10.412 ms against a 10.667 ms cycle) and jumped every time round the loop;
+  it should now stay at whatever the host's real worst block is, around a millisecond, and NOT
+  step at the wrap. A "host split blocks" row should appear under it with a non-zero count - if it
+  stays absent the correction is not firing and the run proves nothing.
+- THE LATENCY BARS ACROSS A LOOP, same run: the breakdown's Host buffer bar should now hold still
+  at the wrap. It was being told the buffer was 8 frames on the two calls a split produces.
+- THE SAME AT 256 FRAMES, which is the control: Live does not split there, so the split count must
+  stay at zero and every figure must read as it did before this change.
+- THE PANEL'S NEW SHAPE (2026-09-03). The canvas went 920 -> 890 and the graph now follows the
+  content instead of being anchored to the canvas bottom, so the gap CT reported between the
+  latency breakdown and the trace should be gone. Check all three modes and both a chosen and an
+  unchosen clock source: the trace should sit just under the breakdown in every one of them, with
+  any leftover room at the BOTTOM EDGE, and it must never overlap the Residual row.
+
 - THE CLOCK INPUT IN LIVE (2026-09-03). Pick a source on the new "Clock in" row and confirm the
   CLOCK INPUT section fills: BPM, ms/clock, jitter, "vs host" in ppm, and RUNNING following the
   master's transport. Verified offline against synthetic clocks and against our own output through

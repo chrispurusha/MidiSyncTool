@@ -459,6 +459,11 @@ public:
         ms_stats_gap(stats);
         clock.haveBase = false;
         clock.havePrev = false;
+        // AND THE CYCLE TRACKER, for the same reason: the next call does not continue the last
+        // one's device cycle, and treating it as a continuation would place its audio a fragment
+        // into a cycle that ended before the pause.
+        haveCall       = false;
+        cycleFramesSoFar = 0;
     }
 
     // THE PROJECT MUST REMEMBER THE PORT, or every reopened set is silent until someone notices.
@@ -826,13 +831,92 @@ public:
         double   hostNowMs  = (double)AudioConvertHostTimeToNanos(hostNow) / 1.0e6;
         double   wallDelta  = (lastHostMs > 0.0) ? (hostNowMs - lastHostMs) : 0.0;
 
+        // ONE DEVICE CYCLE IS NOT ALWAYS ONE process() CALL, and a loop boundary is where that
+        // stops being a detail.
+        //
+        // Live SPLITS the buffer at a loop wrap: one 512-frame cycle arrives as two calls - 500
+        // frames and then 12 - microseconds apart, because both are computed inside the same audio
+        // callback. Everything downstream had been written on the assumption that the wall clock
+        // read at the top of process() is when THIS block's audio begins, and for the second
+        // fragment that is false by the whole length of the first one.
+        //
+        // MEASURED, and it is the reason this exists. Live 12.4.5, 512-frame buffer, 1-bar loop at
+        // 130 BPM: block sizes 8..512 with 883 changes over 53708 blocks - 2.84 per loop, which is
+        // exactly one split (512 -> a -> b -> 512) every time round. Host block jitter reported a
+        // worst case of -10.412 ms against a 10.667 ms cycle: the gap between the two fragments is
+        // ~0, judged against the first fragment's own 10.417 ms, so the figure is the fabricated
+        // difference and nothing else. Because the RMS never forgets, every wrap added another one
+        // and the number climbed all session. At a 256-frame buffer Live did not split at all,
+        // which is why this was never seen before and why Docs/findings.txt said it never happens.
+        //
+        // THE FIX IS ONE TIMESTAMP, not a special case in four metrics. A fragment's audio starts
+        // where the frames already handed over this cycle end, so that is the moment it is given -
+        // and the block period, the timebase model, the probe and the onset detector are all
+        // correct again without knowing splitting exists. Across a cycle the corrected times still
+        // sum to the real interval, so a genuinely late callback is still reported as one.
+        //
+        // WHAT COUNTS AS A CONTINUATION - two tests, and it takes both.
+        //
+        //   THE FRAMES MUST FIT. A device cycle delivers one buffer, so a call whose frames would
+        //   take the running total past a whole buffer cannot belong to the cycle before it. This
+        //   is the deterministic half and it carries the common case on its own.
+        //
+        //   AND THE CALL MUST SHARE THE CYCLE'S WALL INSTANT. Half a buffer separates the two
+        //   regimes by three orders of magnitude - fragments arrive microseconds apart because
+        //   they are computed inside one audio callback, cycles ten milliseconds apart because
+        //   that is what the device is doing. It is the guard for the case the frames test cannot
+        //   see: a genuinely SHORT cycle followed by a normal one, whose frames also happen to fit.
+        //
+        // THE BUFFER IS THE LARGEST SINGLE CALL SEEN, not maxSamplesPerBlock, and that distinction
+        // is the one the first attempt got wrong. A host is entitled to hand over less than it
+        // declared, and a host that consistently does - 256 through a 512 declaration - would have
+        // put both thresholds exactly on a real cycle boundary. Measured behaviour cannot.
+        //
+        // Keying the timing test off the PREVIOUS CALL's duration instead was the other wrong
+        // answer, and the harness caught it: where the wrap falls early in a buffer the first
+        // fragment is small, so half of it is a few hundred microseconds - less than the work a
+        // host does between the two halves - and the split read as two cycles again.
+        if ((uint32_t)data.numSamples > observedMaxFrames) {
+            observedMaxFrames = (uint32_t)data.numSamples;
+        }
+        uint32_t cycleFrames = (observedMaxFrames > 0) ? observedMaxFrames : (uint32_t)maxBlock;
+        double   cycleMs     = ((sampleRate > 0.0) && (cycleFrames > 0))
+                               ? (((double)cycleFrames / sampleRate) * 1000.0) : 0.0;
+        bool     newCycle    = true;
+
+        if (haveCall && (hostNow >= prevCallHostTime) && (cycleMs > 0.0)) {
+            double sinceMs = (double)AudioConvertHostTimeToNanos(hostNow - prevCallHostTime) / 1.0e6;
+
+            newCycle = ((cycleFramesSoFar + (uint32_t)data.numSamples) > cycleFrames)
+                       || (sinceMs >= (0.5 * cycleMs));
+        }
+
+        if (newCycle) {
+            // THE CYCLE THAT JUST ENDED IS THE HOST'S REAL BUFFER, and it is what the latency
+            // breakdown has to be told about - see the note where blockMs is published.
+            cycleFramesLast    = haveCall ? cycleFramesSoFar : (uint32_t)data.numSamples;
+            cycleStartHostTime = hostNow;
+            cycleFramesSoFar   = 0;
+        } else {
+            splitCalls++;
+        }
+        uint64_t blockHostTime = cycleStartHostTime;
+
+        if ((sampleRate > 0.0) && (cycleFramesSoFar > 0)) {
+            blockHostTime += AudioConvertNanosToHostTime(
+                (uint64_t)(((double)cycleFramesSoFar / sampleRate) * 1.0e9));
+        }
+        prevCallHostTime  = hostNow;
+        cycleFramesSoFar += (uint32_t)data.numSamples;
+        haveCall          = true;
+
         // WHERE THE MUSICAL POSITION SHOULD HAVE GOT TO, if nothing jumped. Anything else is a loop
         // wrap, a playhead move or a tempo change taking effect - and those are the events a clock
         // generator has to handle correctly, so they are logged the moment they happen rather than
         // whenever the heartbeat next comes round. The 2-second heartbeat was far too coarse to
         // show what a loop boundary does.
         ms_stats_block(stats,
-                       hostNow,
+                       blockHostTime,
                        (uint32_t)data.numSamples,
                        sampleRate,
                        ((ctx->state & ProcessContext::kTempoValid) != 0) ? ctx->tempo : 0.0,
@@ -846,7 +930,7 @@ public:
         // its own - so a run left armed from before the mode changed would queue expectations that
         // nothing will ever match, and count each one as a miss.
         if (mode == eMsModeMeasure) {
-            ms_probe_process(&probe, detect, (uint32_t)data.numSamples, sampleRate, hostNow);
+            ms_probe_process(&probe, detect, (uint32_t)data.numSamples, sampleRate, blockHostTime);
         }
 
         // THE CLOCK, before any logging: the ticks in this block belong to the wall time just read,
@@ -861,7 +945,7 @@ public:
                          ctx->cycleEndMusic,
                          (uint32_t)data.numSamples,
                          sampleRate,
-                         hostNow);
+                         blockHostTime);
 
         // THE AUDIO, after the clock: this block's transients are answers to ticks scheduled in
         // earlier blocks, so the order does not matter for correctness, but the clock is the
@@ -901,7 +985,7 @@ public:
                 }
                 samples = sumBuffer;
             }
-            ms_detect_audio(detect, samples, (uint32_t)data.numSamples, sampleRate, hostNow);
+            ms_detect_audio(detect, samples, (uint32_t)data.numSamples, sampleRate, blockHostTime);
         }
         // ---- publish, for the panel ----------------------------------------------------------
         //
@@ -925,6 +1009,7 @@ public:
             atomic_store(&status->commitMarginMinMs,  snap.marginMinMs);
             atomic_store(&status->lateTicks,          (unsigned)snap.lateTicks);
             atomic_store(&status->blockPeriodRmsMs,   snap.blockPeriodRmsMs);
+            atomic_store(&status->blockPeriodWorstMs, snap.blockPeriodWorstMs);
             atomic_store(&status->blockGaps,          (unsigned)snap.blockGaps);
             atomic_store(&status->residualRmsMs,       ms_clock_residual_ms(&clock));
             atomic_store(&status->modelResyncs,        (unsigned)clock.modelResyncs);
@@ -951,10 +1036,19 @@ public:
             // Live it is the audio preferences. It is worth reporting anyway because it is a real
             // and exactly knowable part of the input path: the audio in this block was captured at
             // least one buffer ago.
+            // THE HOST'S BUFFER IS THE CYCLE, NOT THE CALL, and that distinction is the second
+            // half of the split-block fault above. This is published every block and read by the
+            // breakdown's "Host buffer" bar, so on the two calls a loop wrap produces it was
+            // publishing a FRAGMENT - 8 frames, 0.167 ms - and the whole bar chart jumped every
+            // time round the loop. Which is what "the latency bars reset at the loop start" was.
+            uint32_t hostCycleFrames = (cycleFramesLast > 0) ? cycleFramesLast
+                                                             : (uint32_t)data.numSamples;
+
             atomic_store(&status->sampleRate, sampleRate);
-            atomic_store(&status->blockFrames, (unsigned)data.numSamples);
+            atomic_store(&status->blockFrames, (unsigned)hostCycleFrames);
             atomic_store(&status->blockMs,
-                         (sampleRate > 0.0) ? (((double)data.numSamples / sampleRate) * 1000.0) : 0.0);
+                         (sampleRate > 0.0) ? (((double)hostCycleFrames / sampleRate) * 1000.0) : 0.0);
+            atomic_store(&status->blockSplits, (unsigned)splitCalls);
             atomic_store(&status->compensationMs, clock.compensationMs);
             atomic_store(&status->probeRunning,   ms_probe_running(&probe) ? 1 : 0);
 
@@ -1000,7 +1094,11 @@ public:
         bool   transportChanged = (ctx->state != lastState);
         bool   tempoChanged     = ((ctx->state & ProcessContext::kTempoValid) != 0)
                                   && (fabs(ctx->tempo - lastTempo) > 0.0005);
-        double nowSeconds       = (double)blocksSeen * (double)data.numSamples / ((sampleRate > 0.0) ? sampleRate : 48000.0);
+        // REAL FRAMES, NOT CALLS TIMES THE CURRENT SIZE. With a fixed block the two agree; with a
+        // host that splits, the extra calls run the heartbeat's clock fast - 1.7 % here, harmless
+        // in itself and quietly wrong in a log whose whole purpose is timing.
+        framesSeen             += (int64_t)data.numSamples;
+        double nowSeconds       = (double)framesSeen / ((sampleRate > 0.0) ? sampleRate : 48000.0);
         bool   heartbeat        = (nowSeconds - lastLogged) >= 2.0;
 
         if (transportChanged || tempoChanged || heartbeat) {
@@ -1036,6 +1134,18 @@ public:
                      (long long)ctx->systemTime, wallDelta,
                      (unsigned long long)clock.ticksSent, (unsigned long long)clock.wrapsSeen,
                      flags);
+
+            // WHETHER THE HOST IS SPLITTING, and how often. A split is not a fault and is not
+            // corrected away silently: it is the host's own behaviour, it is what a loop boundary
+            // looks like from in here, and the count is the only way to know the correction above
+            // is firing on real ones rather than on ordinary blocks.
+            if (splitCalls > 0) {
+                ms_log_line("  blocks | %llu split call(s): the host handed one device cycle over in"
+                            " more than one process() call - cycle %u frames, this call %d",
+                            (unsigned long long)splitCalls,
+                            (cycleFramesLast > 0) ? cycleFramesLast : (unsigned)data.numSamples,
+                            (int)data.numSamples);
+            }
 
             // THE TELEMETRY, on the same heartbeat and only while ticks are actually going out.
             // Until there is a panel this log is the only way to read it, and inside a real host it
@@ -1173,6 +1283,17 @@ private:
     double             lastPpq{-1.0};
     double             lastHostMs{0.0};
     bool               warnedNoContext{false};
+
+    // ---- SPLIT BLOCKS: one device cycle handed over in more than one process() call -----------
+    // See the long note in process(). Audio thread only; nothing here is read from the UI.
+    uint64_t           cycleStartHostTime{0};   // wall clock at the first call of the current cycle
+    uint32_t           cycleFramesSoFar{0};     // frames already handed over within it
+    uint32_t           cycleFramesLast{0};      // frames the last COMPLETED cycle carried
+    uint64_t           prevCallHostTime{0};
+    uint32_t           observedMaxFrames{0};    // the host's real buffer, as measured not declared
+    bool               haveCall{false};
+    uint64_t           splitCalls{0};
+    int64_t            framesSeen{0};           // real frames, for the heartbeat's time axis
 };
 
 // ── Controller ───────────────────────────────────────────────────────────────────────────────────

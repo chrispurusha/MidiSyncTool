@@ -17,8 +17,10 @@ Build
 - First plug-in built 2026-09-02: loads, logs ProcessContext. NOT yet run in Live - see to-test.txt
 - Calibrate note-on/off latency as well as clock: send notes instead of clock and measure the audio onset the same way, so the device's note latency and its clock latency are separate data points rather than one blended figure
 - Calibration needs to GUIDE the user (pattern, audio routing, MIDI port) and check each step, not present a CALIBRATE button that silently returns a wrong number
-- mstDriver models loop wraps, tempo ramps (--ramp) and varying block sizes (--vary, both 2026-09-03): still needs playhead jumps while stopped
+- mstDriver models loop wraps, tempo ramps (--ramp), varying block sizes (--vary) and Live's loop-boundary block split (--split, 2026-09-03): still needs playhead jumps while stopped
 - Loop wrap: infer the wrap sample offset rather than trusting ppq, which snaps to the loop start for one block - see findings 2026-09-02
+- A split block now carries the wrap's true sub-block offset in its own frame count; check whether that makes the inference above unnecessary at 512 frames and still needed at 256
+- msStats still reports blockFramesMin/Max per CALL, so a splitting host reads "VARIES: 8..512"; decide whether that should report the device CYCLE with the split count beside it
 - JUMP tolerance is 1e-6, too tight: a tempo ramp logs twenty lines of noise. Scale it to a fraction of a block
 - Verify compensation end to end: needs the host's own audio as a reference, so QU-24 out 29 patched back to an input
 - The harness round trip reads ~4.5 ms LONGER than Live's for the same rig; suspected capture-ring priming in mstDriver. Confirm, because compensation seeded from a harness run would over-compensate by about a block

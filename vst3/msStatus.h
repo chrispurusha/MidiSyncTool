@@ -55,6 +55,13 @@ typedef struct {
     atomic_uint    lateTicks;
     _Atomic double blockPeriodRmsMs;
 
+    // THE WORST SINGLE BLOCK, beside the RMS. An all-time RMS moves slowly and hides the shape of
+    // what is in it: a host that is steady except for one event per loop reads much like a host
+    // that is mildly unsteady throughout, and telling those apart by watching a third decimal
+    // place is not a measurement. The worst case is the figure a fabricated error goes straight
+    // into - a split block put a whole buffer in it - so it is what says whether one is happening.
+    _Atomic double blockPeriodWorstMs;
+
     // HOW MANY INTERVALS WERE REJECTED AS SUSPENSIONS rather than measured - see MS_STATS_GAP_MS.
     // Shown beside the jitter figure, never swallowed: a metric that silently drops its worst
     // samples is a prettier lie than one that keeps them.
@@ -89,9 +96,17 @@ typedef struct {
     // THE HOST'S BUFFER. A hosted plug-in can report this and never set it - the host owns it. It is
     // reported because it is an exactly knowable part of the input path: the audio in a block was
     // captured at least one buffer before the block was handed over.
+    // THE DEVICE CYCLE, not whatever the last process() call happened to carry. Live hands one
+    // cycle over in two calls at a loop boundary, and publishing the fragment made the breakdown's
+    // Host buffer bar collapse and the whole chart jump once per loop.
     _Atomic double sampleRate;
     atomic_uint    blockFrames;
     _Atomic double blockMs;
+
+    // HOW OFTEN THE HOST SPLIT ONE. Corrected for, never hidden: a figure that quietly discards
+    // samples has to say how many, and the count is also what says the correction is firing on real
+    // splits rather than on ordinary blocks.
+    atomic_uint    blockSplits;
     _Atomic double inputPathMs;
     _Atomic double compensationMs;
 

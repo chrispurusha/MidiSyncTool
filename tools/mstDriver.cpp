@@ -21,8 +21,11 @@
 //     the plug-in asks for through IProcessContextRequirements, so anything built on it would work
 //     here and fail there.
 //   * continousTimeSamples is always 0, same reason.
-//   * The block is NEVER split at a loop boundary. Every block is the full size, so a wrap always
-//     falls inside one.
+//   * The block IS split at a loop boundary, and --split is what does it. This entry used to say
+//     the opposite, and said it on good evidence: at a 256-frame buffer Live never splits, and
+//     every capture behind the claim was taken at 256. At 512 it splits once every time round the
+//     loop - one cycle handed over as two calls at the same wall instant. Without --split the
+//     default is still the unsplit case, because that is what a 256-frame buffer really does.
 //   * AT A WRAP, projectTimeMusic and projectTimeSamples SNAP TO EXACTLY THE LOOP START for one
 //     block regardless of where inside that block the wrap actually fell, and the true sub-block
 //     phase only appears in the FOLLOWING block. This is the quirk the whole tool exists to model:
@@ -599,6 +602,9 @@ int main(int argc, const char ** argv) {
                "  --vary        hand over a DIFFERENT block size each call, between a quarter of\n"
                "                --block and all of it, the way Live splits its buffer. Offline only:\n"
                "                a real device's block size is the device's to choose\n"
+               "  --split       hand the cycle that CONTAINS a loop wrap over as TWO process()\n"
+               "                calls, back to back with no wall time between them, the way Live\n"
+               "                does at a 512-frame buffer - see the note above tSplit\n"
                "  --bars N      loop length in bars of 4/4; 0 disables looping (default 1)\n"
                "  --seconds N   how much musical time to run (default 10)\n"
                "  --rate N      sample rate (default 48000)\n"
@@ -619,6 +625,7 @@ int main(int argc, const char ** argv) {
     double bpm      = 130.0;
     double rampToBpm = 0.0;
     bool   varyBlocks = false;
+    bool   splitAtWrap = false;
     double startFrom = 0.0;
     double bars     = 1.0;
     double seconds  = 10.0;
@@ -665,6 +672,9 @@ int main(int argc, const char ** argv) {
         } else if ((strcmp(argv[i], "--param") == 0) && ((i + 2) < argc)) {
             paramId    = atoi(argv[++i]);
             paramValue = atof(argv[++i]);
+        } else if (strcmp(argv[i], "--split") == 0) {
+            splitAtWrap = true;
+            realtime    = true;   // the whole point is that the two calls share a wall instant
         } else if (strcmp(argv[i], "--vary") == 0) {
             varyBlocks = true;
             realtime   = true;
@@ -950,6 +960,7 @@ int main(int argc, const char ** argv) {
         int64 samplesEmitted = 0;
         int64 totalSamples   = (int64)(seconds * rate);
         unsigned varySeed    = 12345u;
+        int64 splitsMade     = 0;
 
         for (int64 b = 0; (varyBlocks ? (samplesEmitted < totalSamples) : (b < totalBlocks)); b++) {
             // A VARYING BLOCK SIZE, which is the one Live behaviour this harness never reproduced -
@@ -964,8 +975,51 @@ int main(int argc, const char ** argv) {
                 st.block            = size;
                 st.data->numSamples = size;
             }
-            driver_step(&st);
-            samplesEmitted += st.data->numSamples;
+            // A SPLIT AT THE LOOP BOUNDARY - Live's actual behaviour at a 512-frame buffer, and
+            // the one the harness's header used to say never happens. It does; it just does not at
+            // 256, which is what every capture behind that claim was taken at.
+            //
+            // The cycle that CONTAINS the wrap goes over as two calls at the same wall instant,
+            // split where the wrap falls. Nothing else changes: the pair still sums to one cycle
+            // and the next cycle is still due one cycle later, so a plug-in that handles it
+            // correctly must report exactly the same block period as it does without --split.
+            // That equality is the test.
+            int32 splitFirst = 0;
+
+            if (splitAtWrap && (loopEndQn > 0.0)) {
+                double blockQn = (double)st.block / st.qnSamples;
+
+                if ((st.truePosQn < loopEndQn) && ((st.truePosQn + blockQn) >= loopEndQn)) {
+                    int32 at = (int32)((loopEndQn - st.truePosQn) * st.qnSamples);
+
+                    if (at < 1) {
+                        at = 1;
+                    } else if (at > (st.block - 1)) {
+                        at = st.block - 1;
+                    }
+                    splitFirst = at;
+                }
+            }
+
+            if (splitFirst > 0) {
+                int32 whole = st.block;
+
+                st.block            = splitFirst;
+                st.data->numSamples = splitFirst;
+                driver_step(&st);
+
+                st.block            = whole - splitFirst;
+                st.data->numSamples = whole - splitFirst;
+                driver_step(&st);
+
+                st.block            = whole;
+                st.data->numSamples = whole;
+                samplesEmitted     += whole;
+                splitsMade++;
+            } else {
+                driver_step(&st);
+                samplesEmitted += st.data->numSamples;
+            }
 
             if (realtime) {
                 // AN ABSOLUTE DEADLINE, not a sleep of one block's length. usleep() always
@@ -978,8 +1032,8 @@ int main(int argc, const char ** argv) {
                 // badly any individual sleep behaves.
                 realtimeStart = (realtimeStart == 0) ? AudioGetCurrentHostTime() : realtimeStart;
 
-                double dueSamples = varyBlocks ? (double)samplesEmitted
-                                               : ((double)(b + 1) * (double)block);
+                double dueSamples = (varyBlocks || splitAtWrap) ? (double)samplesEmitted
+                                                                : ((double)(b + 1) * (double)block);
                 UInt64 due = realtimeStart
                              + AudioConvertNanosToHostTime((UInt64)((dueSamples / rate) * 1.0e9));
                 UInt64 now = AudioGetCurrentHostTime();
@@ -988,6 +1042,11 @@ int main(int argc, const char ** argv) {
                     usleep((useconds_t)(AudioConvertHostTimeToNanos(due - now) / 1000ULL));
                 }
             }
+        }
+
+        if (splitAtWrap) {
+            printf("split %lld cycle(s) at a loop wrap into two calls each\n",
+                   (long long)splitsMade);
         }
     }
     processor->setProcessing(false);

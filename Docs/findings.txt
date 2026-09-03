@@ -1309,3 +1309,69 @@ and Live's is inferred, and an inference is exactly what today has repeatedly pu
 
 Results consolidated into Docs/measurements.md, which is now the standing table; README status
 updated from "nothing is built yet", which it had been since 2026-09-02.
+
+
+2026-09-03  ABLETON SPLITS THE BLOCK AT A LOOP WRAP AFTER ALL - AT 512 FRAMES
+------------------------------------------------------------
+The 2026-09-02 entry above says "THE BLOCK IS NEVER SPLIT. n=256 on every single line, wrap or no
+wrap." That is true and it is why this went unnoticed for a day: every capture behind it was taken
+at a 256-frame buffer. AT 512 LIVE SPLITS, and it does it once every time round the loop.
+
+CT's report: host block jitter jumps up every time the loop returns to the start, and the latency
+breakdown's bars reset at the same moment. Both are the same fault and neither is in the host.
+
+THE EVIDENCE, all of it from /tmp/midisynctool.log of that session (pid 12643), no new capture
+needed:
+
+  blocks | host block size VARIES: 8..512 frames, 883 change(s) over 53708 blocks
+
+  - 53708 blocks at 512/48000 is 573 s; a 1-bar loop at 130 BPM is 1.846 s, so 310 loops.
+  - 883 / 310 = 2.84 size changes per loop. One split is exactly three changes: 512 -> a -> b -> 512.
+  - The same run at a 256-frame buffer (pid 7077) reported NO size changes at all.
+
+  timing | ... block period RMS 0.625 worst -10.412 ms
+
+  - The device cycle is 512/48000 = 10.667 ms.
+  - 10.667 - 10.412 = 0.255 ms = 12.2 frames.
+  - So the cycle went over as 500 frames and then 12. The two calls are microseconds apart because
+    both are computed inside ONE audio callback, and ms_stats_block judged that ~0 wall gap against
+    the first fragment's own 10.417 ms. -10.412 is that subtraction and nothing else.
+
+WHY IT CLIMBED ALL SESSION. The block-period RMS is an all-time sum that never forgets - the same
+property that made a single backgrounding read as 89 ms. A fabricated error every loop is a
+fabricated error 310 times, and the figure walks up as the wrap's sub-block offset drifts (the loop
+length is not a whole number of blocks, so the split point moves ~40 samples a loop and the fake
+error grows towards a full cycle). Watching it "jump at the loop start" is watching exactly that.
+
+WHY THE BARS RESET. status->blockMs is published from data.numSamples EVERY call, and the latency
+breakdown's "Host buffer" term is built from it. On the two calls a wrap produces, the panel was
+being told the host's buffer was 8 frames - 0.167 ms - so that bar collapsed, the remainder term
+(roundTrip - known) jumped to absorb it, and the whole chart flickered once per loop.
+
+THE FIX IS ONE TIMESTAMP, in msVst3.cpp's process(), not four special cases. A fragment's audio
+begins where the frames already handed over this cycle end, so that - cycle start plus
+framesSoFar/rate - is the moment handed to ms_stats_block, ms_clock_process, ms_probe_process and
+ms_detect_audio. Across a whole cycle the corrected times still sum to the real interval, so a
+genuinely late callback is still reported as one; within a cycle the fabricated error is exactly
+zero. blockMs is published from the last COMPLETED cycle instead of the last call.
+
+DETECTING A CONTINUATION took two attempts and the harness caught the first one.
+
+  WRONG: "less than half the PREVIOUS CALL's own duration". Where the wrap falls early in a buffer
+  the first fragment is small - 20 frames is 0.42 ms, half of it 0.21 ms - which is less than the
+  work a host does between the two halves, so the split read as two cycles again.
+
+  RIGHT: the frames must fit inside one buffer AND the call must share the cycle's wall instant
+  (within half a buffer). The buffer is the LARGEST SINGLE CALL SEEN, deliberately not
+  maxSamplesPerBlock: a host handing over 256 through a 512 declaration would put both thresholds
+  exactly on a real cycle boundary, and measured behaviour cannot.
+
+tools/mstDriver grew --split, which hands the cycle CONTAINING the wrap over as two back-to-back
+calls. A clean run (15 s, 512 frames, 22 split calls) reports block period RMS 0.022 ms worst
+-0.158 ms; with the correction disabled the same run shows multi-millisecond worst cases. The
+harness's own usleep pacing is worth about 1 ms RMS on a busy machine, so it can demonstrate the
+mechanism and cannot measure the improvement - Live is the reference, as ever.
+
+NOTE FOR ANYTHING THAT READS THE PANEL: "Host block jitter" figures from before this build are not
+comparable with figures after it, on any host that splits. A new row says so - it appears only when
+splitting has actually happened, and gives the count.
