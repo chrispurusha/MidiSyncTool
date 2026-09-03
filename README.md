@@ -7,9 +7,19 @@ clock, schedules a clean clock of its own to a chosen MIDI output, and measures 
 at the other end actually does with it — latency, jitter and drift — by listening to the audio
 coming back.
 
-**Status: nothing is built yet.** The concept is in [`Docs/Concept.txt`](Docs/Concept.txt) and the
-design thinking, what is being reused, and the open decisions are in
-[`Docs/design.md`](Docs/design.md).
+**Status: working, and taking real measurements.** It generates and schedules a clock, corrects for
+the host's own block jitter, measures a device's latency and jitter from the returning audio, and has
+a **monitor mode** that sends nothing at all and recovers the grid from the audio instead — so gear
+already running on someone else's clock can be measured too.
+
+Results so far are in [`Docs/measurements.md`](Docs/measurements.md), including a four-way comparison
+of clock masters. The short version: on this rig the drum machine's own timing floor swamps every
+difference between clock sources, and what actually separates the masters is **tempo accuracy**, not
+jitter.
+
+The concept is in [`Docs/Concept.txt`](Docs/Concept.txt), the design thinking and open decisions in
+[`Docs/design.md`](Docs/design.md), and the full history — every measurement and every trap that cost
+real time — in [`Docs/findings.txt`](Docs/findings.txt).
 
 ## Why it exists
 

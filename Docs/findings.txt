@@ -1101,3 +1101,39 @@ prior expectation: Live measured 0.232 ms RMS of block jitter and its native clo
 model behind it, so if the Tempest passes clock jitter through at all, B should land well above the
 0.132 ms floor. If B also reads 0.132, the Tempest filters its own input and clock jitter in this
 range never reaches the audio - a negative result, and a useful one.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-03  A/B: OUR CLOCK AGAINST LIVE'S OWN, THROUGH THE CIRKLON
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Same path (Live -> Cirklon -> DIN -> Tempest), same sample, same pattern, same 130 BPM, monitor mode
+observing. Exactly one generator running in each.
+
+  A  this plug-in, Live's Sync off    grid 461.547 ms   jitter 0.133 ms RMS   peak dev 0.276 ms
+  B  Live's native Sync, plug-in off  grid 461.551 ms   jitter 0.143 ms RMS   peak dev 0.318 ms
+
+0.010 ms apart, ours the better - about 0.053 ms in quadrature. Two independent observers saw B:
+the offline driver at 0.143 and LIVE'S OWN PLUG-IN INSTANCE at 0.138 over 134 onsets, both writing to
+the same log. Direction right, magnitude marginal, one run each. PROVISIONAL.
+
+THE INFORMATIVE PART IS THE ABSENCE. Live's block jitter is 0.219-0.232 ms RMS and its native clock
+has no timebase model behind it, so a transparent chain would have put B at sqrt(0.132^2 + 0.232^2)
+= 0.27 ms. It read 0.143. Nearly all of Live's clock jitter was absorbed before the audio, and the
+Cirklon - present in both rows, re-clocking - is the obvious absorber. SO THIS PAIR LARGELY MEASURES
+THE CIRKLON'S IMMUNITY, NOT OUR FILTER'S BENEFIT, which was predicted before the run and is the
+reason the direct-to-Tempest A/B still matters.
+
+QUANTIFYING "HOW MUCH BETTER" HONESTLY - three answers, all true, and the question is where to look:
+
+  on the wire                      ours 0.0134-0.0232 ms measured; LIVE'S NEVER MEASURED
+  at the drum machine, via Cirklon ours 0.133 against 0.143 - 7 %, and inside the scatter
+  audibly                          no difference whatever
+
+The first row is the one worth having and the one that does not exist. Live's clock has never been
+timed on a port. Point Live's Sync at IAC with the plug-in in Monitor, run the same listener that
+produced 0.0134 ms, then run ours the same way: that pair is the only defensible answer, and it is
+about five minutes of work. Until then the honest position is that this plug-in's clock is measured
+and Live's is inferred, and an inference is exactly what today has repeatedly punished.
+
+Results consolidated into Docs/measurements.md, which is now the standing table; README status
+updated from "nothing is built yet", which it had been since 2026-09-02.
