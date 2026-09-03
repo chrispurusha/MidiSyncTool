@@ -77,6 +77,7 @@ static void ms_menu_action(int index) {
 #define ROW_H          (20.0)
 #define ROW_GAP        (24.0)
 
+static double    gMonitor    = 0.0; // 0 = generating clock, 1 = listening only
 static double    gControlTop = 0.0; // set by the frame, since it follows the sections above it
 
 static tRectangle row_value(int row) {
@@ -178,10 +179,11 @@ bool ms_draw_menu_active(void) {
     return gContextMenu.active;
 }
 
-void ms_draw_set_values(double midiDest, double audioSource, double compensate) {
+void ms_draw_set_values(double midiDest, double audioSource, double compensate, double monitor) {
     gMidiDest    = midiDest;
     gAudioSource = audioSource;
     gCompensate  = compensate;
+    gMonitor     = monitor;
 }
 
 static void ms_mouse_coord(tCoord * coord) {
@@ -231,6 +233,19 @@ static void control_row(int row, const char * name, const char * value, bool ste
     }
     set_rgb_colour((tRgb){0.92, 0.92, 0.94});
     render_text(mainArea, (tRectangle){{textX, box.coord.y + 5.0}, {0.0, TEXT_H}}, value);
+}
+
+// A TOGGLE, drawn across the whole value box rather than as a pair of arrows. Two states, and the
+// colour carries the state as well as the text: a mode that silently changes what every figure below
+// it MEANS has to be unmissable, not a word in a box the same colour as everything else.
+static void toggle_row(int row, const char * name, const char * value, bool on) {
+    tRectangle box = row_value(row);
+
+    set_rgb_colour((tRgb)MS_CAPTION_GREY);
+    render_text(mainArea, (tRectangle){{ROW_X, box.coord.y + 5.0}, {0.0, TEXT_H}}, name);
+
+    draw_button(mainArea, box, value,
+                on ? (tRgb){0.55, 0.36, 0.12} : (tRgb){0.24, 0.24, 0.27});
 }
 
 static void stat(double x, double y, const char * name, const char * value) {
@@ -425,11 +440,33 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
     snprintf(buffer, sizeof(buffer), "%.1f ms", gCompensate * MS_COMPENSATE_MAX);
     control_row(2, "Compensation", buffer, true);
 
-    y           = gControlTop + (3.0 * ROW_GAP) + 6.0;
+    bool monitor = (gMonitor >= 0.5);
 
-    snprintf(buffer, sizeof(buffer), "%u", (unsigned)atomic_load(&status->ticksSent));
-    stat(28.0, y, "Clocks sent", buffer);
-    y          += 16.0;
+    toggle_row(3, "Mode", monitor ? "MONITOR ONLY - listening, sending nothing"
+                                  : "Generating clock", monitor);
+
+    y           = gControlTop + (4.0 * ROW_GAP) + 6.0;
+
+    if (monitor) {
+        // CLOCKS SENT IS ZERO BY DESIGN HERE and saying so is better than showing the zero, which
+        // reads as a fault. The grid figure replaces it: it is what the plug-in has worked out the
+        // external master is doing, and a plausible tempo there is the confirmation that the
+        // detector is locked onto the pattern rather than onto noise.
+        double bpm = atomic_load(&status->monitorBpm);
+
+        if (bpm > 0.0) {
+            snprintf(buffer, sizeof(buffer), "%.3f ms  (%.2f BPM)",
+                     atomic_load(&status->monitorPeriodMs), bpm);
+        } else {
+            snprintf(buffer, sizeof(buffer), "fitting...");
+        }
+        stat(28.0, y, "Fitted grid", buffer);
+        y += 16.0;
+    } else {
+        snprintf(buffer, sizeof(buffer), "%u", (unsigned)atomic_load(&status->ticksSent));
+        stat(28.0, y, "Clocks sent", buffer);
+        y += 16.0;
+    }
 
     // COMMIT MARGIN, which is the plug-in's own health and the one number that says whether the
     // schedule is comfortable. While it stays positive CoreMIDI holds each tick early and delivers
@@ -477,6 +514,25 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
 
     if (hits == 0) {
         stat(28.0, y, "Round trip", "waiting for audio");
+        y += 16.0;
+    } else if (monitor) {
+        // NO ROUND TRIP IN MONITOR MODE, and a dash rather than the last value it held. A stale
+        // latency left on screen beside live jitter figures is exactly the sort of thing that gets
+        // written down as a measurement an hour later.
+        stat(28.0, y, "Round trip", "-  (no reference: listening only)");
+        y += 16.0;
+
+        snprintf(buffer, sizeof(buffer), "%.3f ms", jitter);
+        stat(28.0, y, "Jitter RMS", buffer);
+        y += 16.0;
+
+        snprintf(buffer, sizeof(buffer), "%.3f ms", atomic_load(&status->roundTripPeakDevMs));
+        stat(28.0, y, "Peak deviation", buffer);
+        y += 16.0;
+
+        snprintf(buffer, sizeof(buffer), "%u onsets fitted",
+                 (unsigned)atomic_load(&status->monitorOnsets));
+        stat(28.0, y, "Window", buffer);
         y += 16.0;
     } else {
         snprintf(buffer, sizeof(buffer), "%.3f ms", atomic_load(&status->roundTripMeanMs));
@@ -653,6 +709,14 @@ bool ms_draw_click(double x, double y, tMsEditRequest * request) {
     if (hit(row_next(2), x, y)) {
         request->which      = eMsEditCompensate;
         request->normalized = step_value(gCompensate, 1.0);
+        return true;
+    }
+
+    // THE MODE TOGGLE. Straight to the opposite state - no menu, because there are two of them and a
+    // drop-down to choose between two things is a click more than it needs to be.
+    if (hit(row_value(3), x, y)) {
+        request->which      = eMsEditMonitor;
+        request->normalized = (gMonitor >= 0.5) ? 0.0 : 1.0;
         return true;
     }
     return false;

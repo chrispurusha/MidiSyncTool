@@ -294,14 +294,24 @@ static void driver_step(tDriverState * st) {
     }
 
     // Written BEFORE process(), because the plug-in reads the input buffer during it.
-    if ((st->injectMs > 0.0) && (st->injectInto != nullptr) && playing) {
+    // NOT GATED ON `playing`, AND THAT MATTERS. Gating the whole block meant the input buffer was
+    // left holding whatever the device really captured whenever the transport was stopped - so the
+    // first and last tenth of every run fed the plug-in REAL AUDIO in the middle of a synthetic
+    // validation. Harmless for as long as the drum machine happened to be silent, and thoroughly
+    // misleading the moment it was not: a 22 s run injected 38 clicks on a 461.5 ms grid and the
+    // detector saw 47 onsets, the extra nine being a Tempest playing at 500 ms. That read as a
+    // regression in the plug-in and was entirely this harness's doing.
+    //
+    // With --inject-ms the input is now synthetic for the WHOLE run - silence when stopped, clicks
+    // when playing - so nothing the outside world does can reach the measurement.
+    if ((st->injectMs > 0.0) && (st->injectInto != nullptr)) {
         double periodSamples = st->qnSamples;
         double offsetSamples = (st->injectMs / 1000.0) * st->rate;
 
         for (int32 i = 0; i < st->data->numSamples; i++) {
             double since = (double)(st->samplesPlayed + i) - offsetSamples;
 
-            if ((since >= 0.0) && (fmod(since, periodSamples) < 1.0)) {
+            if (playing && (since >= 0.0) && (fmod(since, periodSamples) < 1.0)) {
                 st->clickLeft = 0.002 * st->rate;   // a 2 ms click, ample for a 150 Hz high pass
             }
             float value = 0.0f;
@@ -313,7 +323,10 @@ static void driver_step(tDriverState * st) {
             st->injectInto[0][i] = value;
             st->injectInto[1][i] = value;
         }
-        st->samplesPlayed += st->data->numSamples;
+
+        if (playing) {
+            st->samplesPlayed += st->data->numSamples;
+        }
     }
     st->processor->process(*st->data);
 

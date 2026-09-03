@@ -49,3 +49,12 @@ Confirmed -> delete the line. Check failed -> move it to todo.txt.
   and check that the figures move and that resizing behaves.
 - Latency compensation against real hardware. Proved only against the harness's synthetic device so
   far; MST_OFFSET_MS=-21.9 should bring the Tempest onto the beat and has not been tried.
+- MONITOR MODE against a genuinely free-running master. Validated only against digitally injected
+  clicks so far (461.548 ms recovered against a true 461.5385, jitter 0.017 ms). What has NOT been
+  tried is a real external master: start the Cirklon's own transport so it does not depend on Live,
+  then switch the panel to Monitor and confirm the fitted BPM matches the Cirklon and the jitter is
+  in the same region as the 0.113 ms measured while we were clocking it.
+- Monitor mode with a pattern containing RESTS, which is what the grid-slot assignment exists for.
+  Every test so far has had a hit in every slot, so the empty-slot path is unexercised.
+- The Mode toggle itself in Live: that it survives a saved set, and that leaving monitor mode
+  mid-playback re-sends START or SPP + CONTINUE rather than resuming silently.

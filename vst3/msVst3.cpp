@@ -114,6 +114,7 @@ enum {
     kParamMidiDest = 0,      // 0 = none, 1..n = the nth destination
     kParamCompensate,        // device latency to compensate, in milliseconds
     kParamAudioSource,       // which of the channels the host hands us to analyse
+    kParamMonitor,           // 0 = generate clock, 1 = listen only and fit a grid to the audio
     kParamCount
 };
 
@@ -299,17 +300,15 @@ public:
         const char * wanted = getenv("MST_MIDI_DEST");
 
         if (wanted != NULL) {
-            clock.destination = ms_midi_index_for_name(wanted);
+            set_selected_port(ms_midi_index_for_name(wanted));
 
             if (clock.destination < 0) {
                 ms_log_line("MST_MIDI_DEST '%s' is not present - generating nothing", wanted);
             } else {
                 ms_log_line("clock destination: [%d] %s", clock.destination, wanted);
             }
-            // The probe drives the same device. There is no case for calibrating one port and
-            // clocking another.
-            probe.destination = clock.destination;
-
+            // The probe drives the same device - set_selected_port() does both. There is no case
+            // for calibrating one port and clocking another.
             if ((status != nullptr) && (clock.destination >= 0)) {
                 ms_midi_name(clock.destination, status->destName, sizeof(status->destName));
                 atomic_store(&status->haveDestination, 1);
@@ -412,7 +411,7 @@ public:
         if (stream == nullptr) {
             return kResultOk;
         }
-        double values[kParamCount] = { 0.0, 0.0, 0.0 };
+        double values[kParamCount] = { 0.0, 0.0, 0.0, 0.0 };
         int32  read = 0;
 
         stream->read(values, (int32)sizeof(values), &read);
@@ -427,6 +426,12 @@ public:
 
         if (read >= (int32)(3 * sizeof(double))) {
             apply_parameter(kParamAudioSource, values[2]);
+        }
+
+        // A STATE BLOCK FROM AN OLDER BUILD IS SHORTER and simply stops here, leaving monitor mode
+        // off - which is the right default for a set saved before the mode existed.
+        if (read >= (int32)(4 * sizeof(double))) {
+            apply_parameter(kParamMonitor, values[3]);
         }
         char name[MS_MIDI_NAME_LEN] = {0};
 
@@ -445,8 +450,7 @@ public:
                 // chosen" and has to look different: one is a plug-in waiting for hardware it has
                 // been told to use, the other has never been told anything. Answering the first with
                 // the second is how a saved setup silently starts driving the wrong port.
-                clock.destination = -1;
-                probe.destination = -1;
+                set_selected_port(-1);
 
                 if (status != nullptr) {
                     snprintf(status->waitingName, sizeof(status->waitingName), "%s", name);
@@ -463,7 +467,7 @@ public:
         if (stream == nullptr) {
             return kResultOk;
         }
-        double values[kParamCount] = { paramDest, paramCompensate, paramAudioSource };
+        double values[kParamCount] = { paramDest, paramCompensate, paramAudioSource, paramMonitor };
         int32  written = 0;
 
         stream->write(values, (int32)sizeof(values), &written);
@@ -487,15 +491,53 @@ public:
 
     // ONE PLACE where a parameter becomes an effect, so the state restore and the host's own
     // parameter changes cannot diverge.
+    // THE DESTINATION IS A FUNCTION OF TWO PARAMETERS, so it gets one place to be decided in.
+    // Monitor mode overrides the chosen port with "none", which is what actually makes the plug-in
+    // silent: ms_clock_process returns immediately on a negative destination and sends nothing at
+    // all - no ticks, no Start, no Stop. The chosen port is REMEMBERED rather than cleared, so
+    // leaving monitor mode puts the rig back exactly as it was without the user re-picking it.
+    // ONE OWNER FOR THE CHOSEN PORT, and it is NOT the parameter. The port can be chosen two ways -
+    // the panel's parameter, or MST_MIDI_DEST at construction for a headless run - and deriving it
+    // from the parameter here meant the environment's choice was silently discarded the first time
+    // anything else called this. The harness set the port by name, toggled monitor mode, and the
+    // clock went quiet with the panel still showing the right destination.
+    void set_selected_port(int port) {
+        selectedPort = port;
+        refresh_destination();
+    }
+
+    void refresh_destination(void) {
+        int port = monitorMode ? -1 : selectedPort;
+
+        clock.destination = port;
+        probe.destination = port;
+    }
+
     void apply_parameter(int id, double normalized) {
-        if (id == kParamMidiDest) {
+        if (id == kParamMonitor) {
+            paramMonitor = normalized;
+            monitorMode  = (normalized >= 0.5);
+
+            // Switching source resets the detector's figures, which is right: a monitor reading and
+            // a latency reading are not the same measurement and must never be averaged together.
+            ms_detect_set_source(detect, monitorMode ? eMsDetectMonitor : eMsDetectFromClock);
+            ms_stats_reset(stats);
+            refresh_destination();
+
+            if (status != nullptr) {
+                atomic_store(&status->monitorMode, monitorMode ? 1 : 0);
+                atomic_store(&status->haveDestination, (clock.destination >= 0) ? 1 : 0);
+            }
+            ms_log_line("monitor mode %s - %s", monitorMode ? "ON" : "off",
+                        monitorMode ? "listening only, grid fitted to the audio"
+                                    : "generating clock again");
+        } else if (id == kParamMidiDest) {
             paramDest = normalized;
 
             int slot = mst_dest_slot(normalized);
 
             // Slot 1 is the first destination, because slot 0 is None.
-            clock.destination = ((slot >= 1) && ((slot - 1) < ms_midi_count())) ? (slot - 1) : -1;
-            probe.destination = clock.destination;
+            set_selected_port(((slot >= 1) && ((slot - 1) < ms_midi_count())) ? (slot - 1) : -1);
 
             if (status != nullptr) {
                 atomic_store(&status->waitingForDevice, 0);
@@ -746,6 +788,9 @@ public:
             atomic_store(&status->missed,             (unsigned)hit.missed);
             atomic_store(&status->spurious,           (unsigned)hit.spurious);
             atomic_store(&status->inputPeak,          (float)hit.inputPeak);
+            atomic_store(&status->monitorPeriodMs,    hit.monitorPeriodMs);
+            atomic_store(&status->monitorBpm,         hit.monitorBpm);
+            atomic_store(&status->monitorOnsets,      (unsigned)hit.monitorOnsets);
 
             atomic_store(&status->scheduleLeadMs, (double)MS_LOOKAHEAD_MS);
 
@@ -832,7 +877,18 @@ public:
 
             ms_detect_read(detect, &hit);
 
-            if ((hit.hits > 0) || (hit.missed > 0) || (hit.spurious > 0)) {
+            if (monitorMode) {
+                // NO LATENCY LINE IN MONITOR MODE. There is no reference for a transient to be late
+                // against, so the only honest figures are the fitted grid and the spread about it.
+                if (hit.monitorOnsets > 0) {
+                    ms_log_line("  monitor| grid %.3f ms (%.3f BPM) | jitter RMS %.3f peak dev %.3f ms"
+                                " | %llu onset(s), %llu empty slot(s) | input peak %.4f",
+                                hit.monitorPeriodMs, hit.monitorBpm,
+                                hit.jitterRmsMs, hit.peakDeviationMs,
+                                (unsigned long long)hit.monitorOnsets,
+                                (unsigned long long)hit.missed, hit.inputPeak);
+                }
+            } else if ((hit.hits > 0) || (hit.missed > 0) || (hit.spurious > 0)) {
                 // ROUND TRIP, and labelled as such - it still contains the interface's A/D and the
                 // host's input buffering. See the note at the top of msDetect.h.
                 ms_log_line("  device | round trip mean %.3f last %.3f min %.3f max %.3f ms"
@@ -912,6 +968,9 @@ private:
     double             paramDest = 0.0;
     double             paramCompensate = 0.0;
     double             paramAudioSource = 0.0;
+    double             paramMonitor = 0.0;
+    bool               monitorMode = false;
+    int                selectedPort = -1;   // the port CHOSEN, before monitor mode gates it
     float              sumBuffer[8192];
     int                statusSlot = -1;
     tMsStatus *        status     = nullptr;
@@ -1016,6 +1075,11 @@ public:
             copy_string(info.shortTitle, "Comp");
             copy_string(info.units, "ms");
             info.flags = ParameterInfo::kCanAutomate;
+        } else if (index == kParamMonitor) {
+            copy_string(info.title, "Monitor only");
+            copy_string(info.shortTitle, "Monitor");
+            info.stepCount = 1;   // a toggle
+            info.flags     = ParameterInfo::kCanAutomate | ParameterInfo::kIsList;
         } else {
             copy_string(info.title, "Analyse channel");
             copy_string(info.shortTitle, "Analyse");
@@ -1040,6 +1104,8 @@ public:
             }
         } else if (id == kParamCompensate) {
             snprintf(text, sizeof(text), "%.1f ms", value * MST_COMPENSATE_MAX);
+        } else if (id == kParamMonitor) {
+            snprintf(text, sizeof(text), "%s", (value >= 0.5) ? "monitor" : "generate");
         } else {
             static const char * names[MS_AUDIO_SOURCES] = { "left", "right", "left + right" };
             int index = (int)((value * (double)(MS_AUDIO_SOURCES - 1)) + 0.5);

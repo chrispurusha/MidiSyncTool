@@ -77,7 +77,18 @@ void ms_clock_process(tMsClock * clock,
                       uint32_t blockFrames,
                       double   sampleRate,
                       uint64_t blockHostTime) {
-    if ((clock->destination < 0) || (tempo <= 0.0) || (sampleRate <= 0.0) || (blockFrames == 0)) {
+    // NO DESTINATION MEANS NOT RUNNING, and that is separate from the "nothing sensible to work
+    // with" case below. Monitor mode reaches here every block, and leaving `running` set through it
+    // would mean the transport edge was missed: on leaving monitor mode mid-play, restarted would be
+    // false and no START or SPP would ever be sent, so the device would sit there taking clock with
+    // no idea where in the bar it was.
+    if (clock->destination < 0) {
+        clock->havePrev = false;
+        clock->running  = false;
+        return;
+    }
+
+    if ((tempo <= 0.0) || (sampleRate <= 0.0) || (blockFrames == 0)) {
         clock->havePrev = false;
         return;
     }

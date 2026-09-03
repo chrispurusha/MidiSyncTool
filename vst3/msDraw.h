@@ -34,6 +34,7 @@ typedef enum {
     eMsEditMidiDest,
     eMsEditAudioSource,
     eMsEditCompensate,
+    eMsEditMonitor,
 } tMsEdit;
 
 typedef struct {
@@ -58,7 +59,7 @@ void ms_draw_set_mouse(double x, double y);
 bool ms_draw_menu_active(void);
 
 // The host's current values, so the panel draws what the host believes rather than its own idea.
-void ms_draw_set_values(double midiDest, double audioSource, double compensate);
+void ms_draw_set_values(double midiDest, double audioSource, double compensate, double monitor);
 
 #ifdef __cplusplus
 }

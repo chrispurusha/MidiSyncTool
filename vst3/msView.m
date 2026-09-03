@@ -330,9 +330,9 @@ void * ms_view_create(double width, double height, tMsEditCallback callback, voi
     return (__bridge_retained void *)view;
 }
 
-void ms_view_set_values(void * view, double midiDest, double audioSource, double compensate) {
+void ms_view_set_values(void * view, double midiDest, double audioSource, double compensate, double monitor) {
     (void)view;
-    ms_draw_set_values(midiDest, audioSource, compensate);
+    ms_draw_set_values(midiDest, audioSource, compensate, monitor);
 }
 
 void ms_view_set_status_slot(void * view, int statusSlot) {

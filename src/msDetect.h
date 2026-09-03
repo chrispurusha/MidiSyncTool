@@ -52,6 +52,14 @@ typedef struct {
     uint64_t missed;           // scheduled events that aged out with no transient
     uint64_t spurious;         // transients that matched no scheduled event
     double   inputPeak;
+
+    // MONITOR MODE ONLY, and zero otherwise. The period the fitted grid settled on, and the tempo
+    // that implies given how far apart the hits were said to be - see ms_detect_set_division().
+    // latencyMean/Min/Max are meaningless here and are left at zero rather than filled with a
+    // number that would look like a measurement.
+    double   monitorPeriodMs;
+    double   monitorBpm;
+    uint64_t monitorOnsets;    // onsets in the fitted window
 } tMsDetectSnapshot;
 
 // WHICH SCHEDULED THING THE TRANSIENTS ARE ANSWERS TO. Both sources register expectations with the
@@ -59,7 +67,26 @@ typedef struct {
 // grids would match each other's transients.
 typedef enum {
     eMsDetectFromClock = 0,   // the drum machine's own sequencer, following our clock
-    eMsDetectFromProbe        // notes this plug-in sent directly
+    eMsDetectFromProbe,       // notes this plug-in sent directly
+
+    // MONITOR: nothing is sent at all, and the grid is recovered FROM THE AUDIO.
+    //
+    // The two above measure a transient against a moment this plug-in chose, which is the only way
+    // to get an absolute LATENCY - and it requires being the clock master. That rules out every
+    // device already running on someone else's clock: a drum machine on its internal timebase, a
+    // hardware sequencer master, a modular, a take already in progress.
+    //
+    // Here the onsets are timestamped and a grid is FITTED to them afterwards, phase and rate
+    // together, with the jitter reported as the residual about that fitted line. No latency figure
+    // is possible - there is no reference to be late against - but the SPREAD is, and the spread is
+    // what is audible.
+    //
+    // THE RATE TERM IS NOT OPTIONAL HERE, and this is the trap the mode exists inside. The host's
+    // musical grid and the external master's are unsynchronised free-running crystals, tens of ppm
+    // apart; over a hundred seconds they separate by milliseconds. Fitting phase alone would report
+    // that separation as jitter and the figure would grow with the length of the run. Fitting rate
+    // as well makes the measurement immune to it, and to any tempo offset at all.
+    eMsDetectMonitor
 } tMsDetectSource;
 
 typedef struct tMsDetect tMsDetect;

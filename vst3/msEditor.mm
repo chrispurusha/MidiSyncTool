@@ -133,8 +133,20 @@ public:
         if ((request == nullptr) || (request->which == eMsEditNone)) {
             return;
         }
-        ParamID id = (request->which == eMsEditMidiDest) ? 0
-                     : ((request->which == eMsEditAudioSource) ? 2 : 1);
+        // EXPLICIT, not a chain of conditionals with a fall-through default. The previous form
+        // mapped anything it did not recognise onto the compensation parameter, so a control added
+        // later would silently dial in latency instead of doing its own job. These numbers are
+        // kParamMidiDest / kParamCompensate / kParamAudioSource / kParamMonitor in msVst3.cpp, and
+        // the two lists have to be read together.
+        ParamID id = 1;   // kParamCompensate
+
+        switch (request->which) {
+            case eMsEditMidiDest:    id = 0; break;
+            case eMsEditCompensate:  id = 1; break;
+            case eMsEditAudioSource: id = 2; break;
+            case eMsEditMonitor:     id = 3; break;
+            default:                 return;
+        }
 
         if (handler != nullptr) {
             handler->beginEdit(id);
@@ -157,7 +169,8 @@ public:
         ms_view_set_values(view,
                            controller->getParamNormalized(0),
                            controller->getParamNormalized(2),
-                           controller->getParamNormalized(1));
+                           controller->getParamNormalized(1),
+                           controller->getParamNormalized(3));
     }
 
     tresult PLUGIN_API isPlatformTypeSupported(FIDString type) SMTG_OVERRIDE {

@@ -20,7 +20,7 @@ typedef void (*tMsEditCallback)(void * user, const tMsEditRequest * request);
 // Returns an NSView *, as a void * so the C++ side need not import AppKit.
 void * ms_view_create(double width, double height, tMsEditCallback callback, void * user,
                       int statusSlot);
-void   ms_view_set_values(void * view, double midiDest, double audioSource, double compensate);
+void   ms_view_set_values(void * view, double midiDest, double audioSource, double compensate, double monitor);
 void   ms_view_set_status_slot(void * view, int statusSlot);
 void   ms_view_destroy(void * view);
 

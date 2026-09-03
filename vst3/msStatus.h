@@ -90,6 +90,14 @@ typedef struct {
     _Atomic double inputPathMs;
     _Atomic double compensationMs;
 
+    // MONITOR MODE. Nothing is generated; the grid is fitted to the audio instead, so the round-trip
+    // figures above are meaningless and the panel must say so rather than show a stale number. The
+    // jitter and peak deviation ARE valid - they are the residual about the fitted line.
+    atomic_int     monitorMode;
+    _Atomic double monitorPeriodMs;
+    _Atomic double monitorBpm;
+    atomic_uint    monitorOnsets;
+
     atomic_int     probeRunning;
     atomic_int     historyWrite;
     _Atomic float  history[MS_STATUS_HISTORY];

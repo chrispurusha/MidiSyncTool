@@ -836,3 +836,268 @@ WHAT IT MEANS STRATEGICALLY. The budget said the generated clock is ~1 % of roun
 and the transport-plus-device is ~98 %. This is the first change to attack that 98 % rather than the
 1 %, and it moved the number immediately - which is the confirmation that the budget was pointing at
 the right place. The remaining 0.113 ms is Cirklon timebase + DIN + Tempest input + A/D + detector.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-03  MONITOR MODE: MEASURING GEAR WE ARE NOT CLOCKING
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+A fourth detector source, eMsDetectMonitor, and a Mode toggle on the panel (kParamMonitor). Nothing
+is sent at all - no ticks, no Start, no Stop - and the grid is recovered FROM THE AUDIO instead.
+
+WHY IT IS NOT JUST "STOP SENDING". The other two sources measure a transient against a moment this
+plug-in chose, which is the only way to get an absolute LATENCY and requires being the clock master.
+Monitor mode gives that up and keeps the SPREAD, which is the audible part. Three steps:
+
+  1. Estimate the hit PERIOD as the MEDIAN interval between onsets. Median, because a missing hit
+     gives an interval of twice the period and one of those drags a mean badly.
+  2. Assign each onset to a grid SLOT, n = round((t - t0) / period). WITHOUT THIS a pattern with any
+     rest in it is fitted against a straight 0,1,2,3 counter, every slot after the rest is off by
+     one, and the fit reports the resulting nonsense as jitter.
+  3. Least squares for PHASE AND RATE TOGETHER, jitter = residual about that line.
+
+THE RATE TERM IS NOT OPTIONAL. The host's grid and an external master's are unsynchronised
+free-running crystals tens of ppm apart; over a hundred seconds they separate by milliseconds.
+Fitting phase alone would report that separation as jitter and the figure would GROW WITH THE LENGTH
+OF THE RUN. This is the same lesson as the timebase model's rate term, in a second place.
+
+A SLIDING window of 256 onsets, not the whole run: a fit over everything since the transport started
+slowly stops describing the present, and one tempo move would bias the residual for ever.
+
+VALIDATED against a known-perfect grid - clicks injected digitally at one per quarter note, 130 BPM,
+device-paced by the QU-24:
+
+  monitor| grid 461.548 ms (129.997 BPM) | jitter RMS 0.017 peak dev 0.032 ms | 70 onset(s),
+         | 0 empty slot(s)
+
+461.5385 ms is the true quarter note at 130 BPM, so the fit is 0.010 ms out over 461 - TWENTY-TWO
+PPM, which is the audio-clock-against-mach-time crystal difference this rig already measures at
+-20 ppm. The fit is correct to the limit of the two clocks. The 0.017 ms jitter sits on the
+detector's own 0.013 ms floor, so the fitting adds essentially nothing.
+
+TWO BUGS FOUND BY TESTING IT, both worth recording:
+
+  - THE CHOSEN PORT HAD NO OWNER. Monitor mode gates the destination to "none", and the first version
+    recomputed the port from the PARAMETER when it did so - which silently discarded a port chosen
+    by MST_MIDI_DEST at construction. Symptom: the harness set the port by name, toggled monitor
+    mode, and the clock never came back, with the panel still naming the right destination. There is
+    now one selectedPort, set by either route, and one place that gates it.
+  - `running` SURVIVED A DESTINATION OF NONE. ms_clock_process returns early on a negative
+    destination but left clock.running set, so leaving monitor mode mid-play would find restarted
+    false and never send START or SPP - the device taking clock with no idea where in the bar it was.
+
+*** THE MODE'S ONE REAL LIMITATION, and it is not a bug: MONITOR MODE STOPS A MASTER THAT IS SLAVED
+TO US. *** Going silent is the whole point, and anything following our clock stops with us. The mode
+is for a master running on its OWN timebase - a drum machine on internal clock, a hardware sequencer
+in charge, a modular. Hit this immediately on first use: with the Cirklon in the chain, switching to
+monitor produced silence on all 32 QU-24 inputs, because the Cirklon was still following Live.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-03  MONITOR MODE MEETS A REAL DRUM PART, AND A SINGLE GRID IS NOT ENOUGH
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Monitor mode validated perfectly against injected clicks (461.548 ms recovered against a true
+461.5385) and then reported 107 ms RMS against the Tempest playing an actual pattern. The device was
+fine. The FIT was wrong, twice over.
+
+FAULT 1 - the base period was the MEDIAN gap. That is right only for a calibration pattern where
+every gap is the same. A real part has gaps of one and three subdivisions, the median is simply the
+short gap, and the long gaps are then not whole multiples of it. Replaced with a low percentile as a
+candidate plus a bounded search for the divisor leaving the least remainder across all gaps. That
+found the right unit - 116.6 ms, matching the arithmetic - and the jitter only fell to 31 ms.
+
+FAULT 2, and the real one - A SINGLE EVENLY-SPACED GRID CANNOT DESCRIBE A DRUM PART AT ALL. The
+measured gaps alternate, dead stable:
+
+  seq | 122.4 348.3 122.2 348.2 123.0 347.9 122.1 348.5 122.3 348.3 122.2 348.3 122.9 347.8
+
+348.3 / 122.4 = 2.845. NOT A WHOLE NUMBER, so no uniform grid contains both gaps, and fitting one
+reports the mismatch as jitter for ever. What is actually there is a PATTERN that repeats: k onsets,
+then the same k again. Each position inside it may sit wherever it likes; jitter is how much a given
+position moves FROM ONE REPEAT TO THE NEXT.
+
+So the fit now finds the repeat length k (smallest k whose gap sequence matches itself k apart,
+within 5 % of the mean gap) and gives EACH POSITION ITS OWN LINE - positions q, q+k, q+2k are evenly
+spaced by one cycle whatever the pattern does inside it. Residuals pooled across positions.
+
+  before (single grid)   jitter 31.1 ms RMS, base 116.6 ms, "514 BPM"
+  after  (per position)  jitter 0.74 ms RMS, cycle 470.644 ms, 127.485 BPM, 2 hits per cycle
+
+*** THE SHAPE IS NOW A MEASUREMENT IN ITS OWN RIGHT, and it is the figure an RMS destroys. ***
+
+  shape | 2 hits per 470.645 ms cycle, at phases: 0.0000 0.7409
+
+Straight sixteenths would put the second hit at 0.7500. It sits at 0.7409 - EARLY by 0.0091 of a
+cycle, which is 4.3 ms - and it does so on every single repeat.
+
+SHUFFLE WAS RULED OUT BY EXPERIMENT, not by argument. The displacement was first seen with the
+Tempest's shuffle ON; the owner turned it off and predicted it would make no difference to sixteenths;
+the displacement is still there, self-clocked, unchanged. The owner was right.
+
+The remaining explanation is the one this file has warned about since the detector was written: ONSET
+DETECTION IS BIASED BY ATTACK TIME. A kick's envelope ramps over milliseconds and a hat's does not,
+so the threshold is crossed later on the kick. Two different drums in one pattern therefore sit at
+two different apparent phases - and a 4.3 ms bias between a kick and a hat is entirely ordinary.
+UNCONFIRMED as the mechanism; the velocity sweep already on the todo list, or simply programming the
+same sound twice, would settle it in minutes.
+
+THE JITTER FIGURE IS OUTLIER-DOMINATED AND SHOULD NOT YET BE QUOTED. 0.74 ms RMS against a peak
+deviation of 7.94 ms says a handful of bad onsets, not a spread: two 8 ms outliers in 143 onsets are
+alone worth 0.95 ms RMS. The raw gaps tell a much tighter story - the short ones span 122.1 to 123.0
+and the long ones 347.6 to 348.6, so about 0.35 ms of interval scatter, implying roughly 0.25 ms of
+phase jitter. Finding and rejecting those outliers is the next thing this mode needs.
+
+AND THE COMPARISON THAT IS NOT YET AVAILABLE: 0.74 ms here against 0.113 ms for Cirklon-driven and
+0.182 ms for USB-direct is NOT a like-for-like ranking. Those two are round-trip spreads measured
+against OUR OWN tick grid; this is a residual about a line fitted to the data itself. Until the
+outliers are dealt with and the same pattern is measured both ways, no statement about the Tempest's
+internal clock against an external one is supportable.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-03  A CLEAN SOUND, AND THE TEMPEST'S OWN CLOCK MEASURED AT LAST
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Tempest switched to a single SAMPLE, one hit per beat, self-clocked. Monitor mode:
+
+  shape  | 1 hits per 470.637 ms cycle, at phases: 0.0000
+  monitor| grid 470.637 ms (127.487 BPM) | jitter RMS 0.132 peak dev 0.261 ms | 71 onsets, 0 spurious
+
+  drum kit pattern   jitter 0.740 ms RMS, peak deviation 7.940 ms   (ratio 11 : 1)
+  single sample      jitter 0.132 ms RMS, peak deviation 0.261 ms   (ratio  2 : 1)
+
+THE PEAK-TO-RMS RATIO IS THE DIAGNOSIS, not the RMS. At 11:1 a handful of bad onsets dominate a
+figure; at 2:1 it is ordinary scatter. So the 7.94 ms outliers were the drum's own tail
+re-triggering, and they are gone because the SOUND changed - not because anything filtered them.
+Software outlier rejection was considered and deliberately not built first, on the grounds that it
+would have hidden exactly this evidence. It is not needed.
+
+It also retrospectively confirms the 4.3 ms phase displacement was BETWEEN TWO DIFFERENT SOUNDS -
+detector attack bias - and not the Tempest placing a hit early. One sound, one phase, no offset.
+
+*** THE COMPARISON IS STILL NOT LIKE FOR LIKE, and the temptation to rank these is the trap. ***
+
+  Tempest self-clocked, monitor mode, single sample      0.132 ms RMS
+  Cirklon -> DIN -> Tempest, clocked by us, drum kit     0.113 ms RMS
+  USB direct to Tempest, clocked by us, drum kit         0.182 ms RMS
+
+Reading that as "the Tempest is worse on its own clock than following the Cirklon" is not supportable
+on this evidence. TWO things differ, not one: the reference (a line fitted to the data, against our
+own tick grid) and, far more importantly, THE SOUND. The 0.113 and 0.182 figures were measured
+against the drum-kit pattern that has just been shown to carry 8 ms outliers. A sharper sample
+detects more precisely, so those two would very likely fall if re-measured with it.
+
+THE EXPERIMENT THAT WOULD SETTLE IT is cheap and uses only monitor mode, which makes the reference
+identical: keep this sample and this one-hit-per-beat pattern, and measure BOTH masters passively -
+self-clocked, then Cirklon-clocked. Same sound, same pattern, same method, one variable. That pair
+finally answers whether this drum machine keeps better time on its own crystal or on an external
+one, which is the question underneath the whole session.
+
+The third configuration cannot use monitor mode - we would have to be the master, and monitor mode
+sends nothing by definition - so it stays a clocked measurement and keeps its caveat.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-03  LIKE FOR LIKE AT LAST: THE TEMPEST'S CLOCK SOURCE MAKES NO DIFFERENCE TO ITS JITTER
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Same sample, same one-hit-per-beat pattern, monitor mode both times, so the reference and the sound
+are identical and only the clock master differs:
+
+  master                          fitted cycle    nominal      jitter RMS   peak dev
+  Tempest's own crystal           470.637 ms      127.5 BPM    0.132 ms     0.261 ms
+  Cirklon over DIN                500.000 ms      120.0 BPM    0.132 ms     0.315 ms
+
+*** THE JITTER IS THE SAME TO THREE DECIMAL PLACES. *** Where the clock comes from makes no
+measurable difference to how steadily this drum machine places a hit. 0.132 ms is therefore the
+Tempest's own floor - its voice triggering, plus the QU-24's A/D, plus the detector's 0.013 ms - and
+no improvement to a clock upstream of it can go below that.
+
+WHAT DOES DIFFER, AND BY A LOT, IS TEMPO ACCURACY:
+
+  Cirklon   nominal 120.0 BPM -> 499.995 ms measured against 500.000 exact.  ~10 ppm.
+  Tempest   nominal 127.5 BPM -> 470.637 ms measured against 470.588 exact.  ~104 ppm SLOW.
+
+Ten times the error. Over a three-minute piece the Tempest alone drifts about 19 ms; the Cirklon does
+not measurably drift at all. That is the real argument for an external master with this pair - not
+jitter, which is identical, but LONG-TERM ACCURACY.
+
+THE OLDER FIGURES ARE NOT PART OF THIS COMPARISON and must not be ranked against it: 0.113 ms
+(Cirklon) and 0.182 ms (USB direct) were measured against OUR tick grid using the drum-kit pattern
+now known to carry 8 ms outliers and a 4.3 ms inter-sound bias. Re-measuring those two with this
+sample is the remaining piece, and until then no statement about USB versus DIN survives contact
+with this evidence.
+
+TWO FAULTS IN OUR OWN INSTRUMENTS, found by the measurements disagreeing with each other:
+
+  - THE PER-POSITION FIT COUNTED ONSET ORDINALS, so a single missed hit renumbered everything after
+    it and dragged the fit through a discontinuity. Same sample and pattern: 8.65 ms RMS with a 70 ms
+    peak on a run that dropped three hits in eighty, against 0.132 ms on a clean one. Now the cycle
+    index is rounded from ELAPSED TIME, which leaves a gap where the missing hit was and costs
+    nothing when none are missing. Dropped hits are counted and reported.
+  - mstDriver's --inject-ms ONLY OVERWROTE THE INPUT WHILE THE TRANSPORT PLAYED, so the first and
+    last tenth of every run fed the plug-in whatever the interface really captured. Harmless while
+    the drum machine was silent, and thoroughly misleading once it was not: a 22 s run injecting 38
+    clicks on a 461.5 ms grid produced 47 onsets, the extra nine being a Tempest playing at 500 ms,
+    and it read as a regression in the plug-in. Injection now owns the input for the whole run.
+
+Both were caught the same way - a number that had been stable suddenly was not, and the peak-to-RMS
+ratio said outliers rather than spread. That ratio has now diagnosed three separate faults in one
+day and is worth reading before the RMS itself.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-03  THE FULL SET: THREE MASTERS, ONE JITTER FIGURE
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Monitor mode throughout - my instance listens and sends nothing while whatever is clocking does the
+clocking - so the analysis, the sample and the pattern are identical across all three and only the
+master differs.
+
+  master                   fitted cycle   nominal              jitter RMS   peak dev   accuracy
+  Tempest's own crystal    470.637 ms     470.588 (127.5 BPM)  0.132 ms     0.261 ms   +104 ppm
+  Cirklon over DIN         499.995 ms     500.000 (120.0 BPM)  0.132 ms     0.315 ms    ~10 ppm
+  Ableton at 130 BPM (*)   461.547 ms     461.538 (130.0 BPM)  0.132 ms     0.324 ms   +18.4 ppm
+
+  (*) MASTER NOT ESTABLISHED, and the row must not be cited as this plug-in's until it is. The
+      owner reports Ableton was clocking the Cirklon at the time and that OUR PLUG-IN MAY HAVE BEEN
+      SENDING AS WELL - two clock sources on one port. So this row is "something at 130 BPM through
+      the Cirklon", which is a real measurement of the path but says nothing about which generator
+      produced it. To be re-run as the A/B below. The other two rows are unaffected: the Cirklon run
+      measured 120.000 BPM exactly while Live sat at 130, so it was genuinely free-running, and the
+      Tempest row was its own crystal at 127.5.
+
+*** 0.132 ms EVERY TIME. *** The Tempest's timing spread does not depend on where its clock comes
+from - not on the master, not on the transport, not on whether a hardware sequencer re-clocks it.
+0.132 ms is the machine's own floor: its voice triggering, the QU-24's A/D, and the detector's
+0.013 ms. Nothing upstream can go below it, which is the same conclusion the jitter budget reached
+from the other direction and is now proved by substitution rather than by subtraction.
+
+THIS RETIRES THE 0.113 / 0.182 COMPARISON. Those were measured against our own tick grid with the
+drum-kit pattern later shown to carry 8 ms outliers and a 4.3 ms inter-sound bias. With a clean
+sample the difference between masters vanishes entirely, so the apparent 38 % Cirklon advantage was
+an artefact of the SOUND, not a property of DIN, USB or re-clocking. The lesson is blunt: a
+measurement chain must be validated before its differences are believed, and the peak-to-RMS ratio
+would have said so at the time had anyone read it.
+
+ACCURACY IS THE ONLY THING THAT SEPARATES THEM, and by an order of magnitude. The Tempest's own
+crystal is ~104 ppm slow - about 19 ms of drift over a three-minute piece - against ~10 ppm for the
+Cirklon. That is the entire practical case for an external master with this pair.
+
+AND A CROSS-CHECK, subject to the same caveat about which generator was running: the 130 BPM row
+reads +18.4 ppm against nominal,
+which is not an error: the tick grid is locked to the HOST'S musical time, which advances with the
+audio clock, and this rig's audio clock was independently measured at about -20 ppm against mach
+time by the drift telemetry. Two entirely separate measurements - a PI rate term learning a crystal
+ratio over minutes, and a least-squares line through drum onsets - agreeing to within 2 ppm. The
+figure is exactly as accurate as the audio timeline it is derived from, which is the correct
+behaviour for ANY clock locked to Live's transport - ours or Live's own - so the cross-check stands
+even though the attribution does not.
+
+THE A/B THAT SETTLES IT, everything else held constant - same path (Ableton -> Cirklon -> DIN ->
+Tempest), same sample, same one-hit-per-beat pattern, same 130 BPM, monitor mode observing:
+
+  A. OUR PLUG-IN ONLY   - Live's Sync OFF for that port; plug-in Port = Cirklon, Mode = Generating
+  B. LIVE'S OWN CLOCK   - Live's Sync ON; plug-in Mode = Monitor so it sends nothing
+
+Exactly one generator in each, and the pair is the question this tool was built to answer. Note the
+prior expectation: Live measured 0.232 ms RMS of block jitter and its native clock has no timebase
+model behind it, so if the Tempest passes clock jitter through at all, B should land well above the
+0.132 ms floor. If B also reads 0.132, the Tempest filters its own input and clock jitter in this
+range never reaches the audio - a negative result, and a useful one.
