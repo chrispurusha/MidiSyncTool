@@ -23,6 +23,8 @@ Build
 - The harness round trip reads ~4.5 ms LONGER than Live's for the same rig; suspected capture-ring priming in mstDriver. Confirm, because compensation seeded from a harness run would over-compensate by about a block
 - The first L + D of a run is uncompensated because the grid cannot be advanced before the transport starts; consider a pre-roll if it ever matters
 - Subtract the constant audio-path terms so the figure can be called device latency rather than round trip - msDevice.c already reports them
+- DECISIVE TEST for the Cirklon result: clock to the Elektron TM-1 (USB-to-DIN), DIN straight into the Tempest, no re-clocking sequencer. ~0.113 ms means the DIN hop did it and the Tempest's USB input was the jitter source; ~0.182 ms means the Cirklon's re-clocking did it
+- Sweep velocity to quantify the onset detector's level bias, which is the one confound in the Cirklon comparison (input peak 0.0785 vs 0.0917, +1.35 dB)
 - Audio loopback calibration: emit a click from the plug-in's own output and detect its return, measuring the interface path on its own with no drum machine in it
 - Audio loopback is now the ONLY way to push the budget further: the wire is 1 % of total jitter and USB+Tempest+A/D is 98 % (findings 2026-09-03)
 - Test whether USB framing is the 0.184 ms downstream term: uniform jitter over a 1 ms USB frame would be 0.289 ms RMS, and 0.184 is 0.64 of that

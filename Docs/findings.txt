@@ -785,3 +785,54 @@ is the one to trust until the audio loopback settles it.
 MS_LOOKAHEAD_MS, the open question from the start: 0 late out of 2801 ticks with a minimum commit
 margin of +9.914 ms against a 10 ms lead. Live never came within 0.09 ms of eating it. On this
 evidence the lookahead has never once been needed - but this was not a heavy set, so it stays.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-03  CIRKLON 2 IN THE CHAIN: 38 % LESS JITTER FOR 77 MICROSECONDS
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Same audio path throughout (Tempest into QU-24 15/16), same host, same plug-in build, two routings
+measured back to back in one Live session. Host-side figures IDENTICAL in both - raw block jitter
+0.222 / 0.225 ms, residual 1.6 %, 0 resyncs - so the plug-in contributes the same to each and this is
+a fair test of the downstream chain alone.
+
+  routing                                   jitter RMS   peak dev   max-min    mean
+  plug-in -> Tempest, USB MIDI              0.182 ms     0.484 ms   0.952 ms   17.308 ms
+  plug-in -> Cirklon2 MIDI 1 -> DIN ->
+                            Tempest         0.113 ms     0.276 ms   0.532 ms   17.385 ms
+
+38 % less jitter, 43 % less peak deviation, 44 % less spread, for 77 MICROSECONDS of added latency -
+and that is with a whole hardware sequencer and a DIN hop inserted. Both figures are settled, not
+still converging: A stabilised at 0.178/0.180/0.182/0.182 over 783 hits, B at 0.112/0.109/0.110/0.112
+/0.115/0.117 over 316. Compared at MATCHED hit counts (264) it is 0.178 against 0.115.
+
+The 215 "missed" on the direct run all appear AFTER hits 783 - that is the re-rig at the end of the
+segment, not a fault during the measurement. Up to that point it is 783 hits, 0 missed, 0 spurious.
+
+*** WHY IT IMPROVED IS NOT YET ESTABLISHED - TWO THINGS CHANGED AT ONCE. ***
+
+  1. The Cirklon RE-CLOCKS: it regenerates timing from its own timebase rather than passing bytes
+     through, which is the hardware version of exactly what this plug-in does in software.
+  2. The Tempest's MIDI INPUT changed from USB to DIN.
+
+Either could be the whole effect. The arithmetic mildly favours (2): DIN at 31250 baud is 320 us per
+byte, and jitter uniform over 320 us is 320/sqrt(12) = 0.092 ms RMS, against 0.113 measured with the
+detector's own 0.013 ms and the A/D on top. A USB frame is 1 ms, giving 0.289 ms, against 0.182
+measured - so the Tempest is evidently not fully frame-quantising, but the ORDERING is right and it
+is consistent with the transport being the dominant term in both cases. SPECULATION until tested.
+
+THE DECISIVE TEST, and the hardware for it is already on the rig: send clock to the Elektron TM-1
+(a USB-to-DIN interface) and DIN from there straight into the Tempest. That is DIN into the Tempest
+with NO re-clocking sequencer, so it isolates the two:
+
+  ~0.113 ms  -> the DIN hop did it, i.e. the Tempest's USB MIDI INPUT was the jitter source
+  ~0.182 ms  -> the Cirklon's re-clocking did it, and DIN is incidental
+
+MINOR CONFOUND to keep in mind: input peak was 0.0785 direct against 0.0917 via the Cirklon, +1.35 dB.
+The onset detector is level-biased by design (see todo), so some small part of the improvement could
+be level rather than timing. 1.35 dB is unlikely to account for 38 %, but the velocity sweep already
+on the todo list would remove the doubt entirely.
+
+WHAT IT MEANS STRATEGICALLY. The budget said the generated clock is ~1 % of round-trip jitter power
+and the transport-plus-device is ~98 %. This is the first change to attack that 98 % rather than the
+1 %, and it moved the number immediately - which is the confirmation that the budget was pointing at
+the right place. The remaining 0.113 ms is Cirklon timebase + DIN + Tempest input + A/D + detector.
