@@ -58,3 +58,10 @@ Confirmed -> delete the line. Check failed -> move it to todo.txt.
   Every test so far has had a hit in every slot, so the empty-slot path is unexercised.
 - The Mode toggle itself in Live: that it survives a saved set, and that leaving monitor mode
   mid-playback re-sends START or SPP + CONTINUE rather than resuming silently.
+- THE THREE PANEL LAYOUT FIXES (2026-09-03), which are geometry and can only be judged by eye in a
+  host. The compensation row now has its own 132 px value box instead of the shared 330, so its
+  arrows sit together rather than a third of a panel apart; every button is inset by
+  DRAW_BUTTON_MARGIN so it stops drawing 4 px past its row into the row below; and the Mode toggle
+  draws its own TEXT_H label instead of going through draw_button(), which sized the text off the
+  row height and ran the sentence off the end of the box. Check the four rows line up, that the
+  arrows still hit where they are drawn, and that the mode sentence fits.

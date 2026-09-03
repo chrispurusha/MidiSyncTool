@@ -27,6 +27,27 @@ MIDI clock out of a DAW is usually jittery, and the jitter is not the same as th
 latency — the two get blamed for each other. This separates them: it generates the cleanest clock
 it can, then measures the device's response independently so the two numbers can be read apart.
 
+## Releases
+
+```
+./do-release beta
+```
+
+Builds a universal (arm64 + x86_64) plug-in, ad-hoc signs it, and writes a `.dmg` containing it and
+a `Read Me First.txt` to the Desktop, ready to attach to a GitHub release. It never installs over
+the copy the machine is running, and it never creates or pushes the tag — it prints the `git tag`
+commands to run once the `.dmg` has been checked.
+
+Versions are semver git tags of the form `V<major>.<minor>.<patch>-beta.<n>`. The `.dmg` is built
+before the tag exists, so the script computes the next version from the newest tag: `beta` is the
+everyday one, with `patch`, `minor`, `major` and `final` for the rest. An explicit version
+(`./do-release 0.9.0-rc1`) is used as given — which is how the first release had to be named, since
+the repository had no tags at all.
+
+There is no paid Apple Developer membership behind this project, so releases cannot be notarized.
+A host will silently refuse to list the plug-in until the quarantine flag is cleared, and those
+instructions ship inside the `.dmg`.
+
 ## Relationship to the sibling projects
 
 This is the fourth in a family that shares [SynthLib](https://github.com/chrispurusha/SynthLib):

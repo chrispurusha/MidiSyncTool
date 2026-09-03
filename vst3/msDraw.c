@@ -76,6 +76,30 @@ static void ms_menu_action(int index) {
 #define ROW_VALUE_W    (330.0)
 #define ROW_H          (20.0)
 #define ROW_GAP        (24.0)
+#define ROW_ARROW_W    (24.0)
+#define MS_ROWS        (4)
+
+// A VALUE BOX IS ONLY AS WIDE AS ITS CONTENT NEEDS. A port name or the mode sentence wants the full
+// width; a compensation reading is at most "100.0 ms", and giving that a 330 px box put its two
+// arrows a third of the panel apart - with the right-hand one standing directly over the mode toggle
+// below and reading as though it belonged to that row rather than this one.
+#define ROW_STEP_W     (132.0)
+
+static const double gRowWidth[MS_ROWS] = {ROW_VALUE_W, ROW_VALUE_W, ROW_STEP_W, ROW_VALUE_W};
+
+static double row_w(int row) {
+    return ((row < 0) || (row >= MS_ROWS)) ? ROW_VALUE_W : gRowWidth[row];
+}
+
+// draw_button() DRAWS A BOX 2 * DRAW_BUTTON_MARGIN WIDER AND TALLER than the rect handed to it, from
+// the same origin - see draw_button_bounds() in utilsGraphics.c. So a button given a whole row's
+// rect covers the 4 px ROW_GAP leaves between rows and runs into the one underneath. Insetting here
+// makes the drawn box exactly the rect the rest of the layout - and the hit test - believes in.
+static tRectangle button_face(tRectangle box) {
+    box.size.w -= (2.0 * DRAW_BUTTON_MARGIN);
+    box.size.h -= (2.0 * DRAW_BUTTON_MARGIN);
+    return box;
+}
 
 static double    gMonitor    = 0.0; // 0 = generating clock, 1 = listening only
 static double    gControlTop = 0.0; // set by the frame, since it follows the sections above it
@@ -85,7 +109,7 @@ static tRectangle row_value(int row) {
                             ROW_VALUE_X, gControlTop + ((double)row * ROW_GAP)
                         },
                         {
-                            ROW_VALUE_W, ROW_H
+                            row_w(row), ROW_H
                         }
     };
 }
@@ -94,17 +118,17 @@ static tRectangle row_prev(int row) {
     return (tRectangle){{
                             ROW_VALUE_X, gControlTop + ((double)row * ROW_GAP)
                         }, {
-                            24.0, ROW_H
+                            ROW_ARROW_W, ROW_H
                         }
     };
 }
 
 static tRectangle row_next(int row) {
     return (tRectangle){{
-                            ROW_VALUE_X + ROW_VALUE_W - 24.0,
+                            ROW_VALUE_X + row_w(row) - ROW_ARROW_W,
                             gControlTop + ((double)row * ROW_GAP)
                         }, {
-                            24.0, ROW_H
+                            ROW_ARROW_W, ROW_H
                         }
     };
 }
@@ -227,9 +251,9 @@ static void control_row(int row, const char * name, const char * value, bool ste
     render_rectangle(mainArea, box);
 
     if (stepped) {
-        draw_button(mainArea, row_prev(row), "<", (tRgb){0.30, 0.30, 0.33});
-        draw_button(mainArea, row_next(row), ">", (tRgb){0.30, 0.30, 0.33});
-        textX = box.coord.x + 34.0;
+        draw_button(mainArea, button_face(row_prev(row)), "<", (tRgb){0.30, 0.30, 0.33});
+        draw_button(mainArea, button_face(row_next(row)), ">", (tRgb){0.30, 0.30, 0.33});
+        textX = box.coord.x + ROW_ARROW_W + 10.0;
     }
     set_rgb_colour((tRgb){0.92, 0.92, 0.94});
     render_text(mainArea, (tRectangle){{textX, box.coord.y + 5.0}, {0.0, TEXT_H}}, value);
@@ -244,8 +268,15 @@ static void toggle_row(int row, const char * name, const char * value, bool on) 
     set_rgb_colour((tRgb)MS_CAPTION_GREY);
     render_text(mainArea, (tRectangle){{ROW_X, box.coord.y + 5.0}, {0.0, TEXT_H}}, name);
 
-    draw_button(mainArea, box, value,
-                on ? (tRgb){0.55, 0.36, 0.12} : (tRgb){0.24, 0.24, 0.27});
+    // NOT draw_button(), WHICH SIZES ITS LABEL OFF THE RECT'S HEIGHT - see internal_render_text().
+    // A 20 px row therefore meant a 20 px font, and this row's sentence ran clean off the end of its
+    // box and off the panel. Every other row's value text is TEXT_H, so this is drawn the same way:
+    // the box painted, the label over it. The colour still carries the state, which is the point.
+    set_rgb_colour(on ? (tRgb){0.55, 0.36, 0.12} : (tRgb){0.24, 0.24, 0.27});
+    render_rectangle(mainArea, box);
+
+    set_rgb_colour((tRgb){0.95, 0.95, 0.97});
+    render_text(mainArea, (tRectangle){{box.coord.x + 8.0, box.coord.y + 5.0}, {0.0, TEXT_H}}, value);
 }
 
 static void stat(double x, double y, const char * name, const char * value) {
