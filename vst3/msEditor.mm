@@ -41,6 +41,7 @@
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 
 #include "msEditor.h"
+#include "msStatus.h"
 #include "msView.h"
 
 using namespace Steinberg;
@@ -133,6 +134,20 @@ public:
         if ((request == nullptr) || (request->which == eMsEditNone)) {
             return;
         }
+        // THE ONE REQUEST THAT IS NOT A PARAMETER, taken before the mapping below so it cannot fall
+        // into it. A clear has no value and nothing for a host to automate or recall, so it goes
+        // straight to the processor through the shared status slot - the same memory the panel
+        // already reads its figures from - and the audio thread picks it up on its next block. See
+        // the note on clearRequest in msStatus.h for why it must not be a parameter.
+        if (request->which == eMsEditClearStats) {
+            tMsStatus * status = ms_status(statusSlot);
+
+            if (status != nullptr) {
+                atomic_fetch_add(&status->clearRequest, 1u);
+            }
+            return;
+        }
+
         // EXPLICIT, not a chain of conditionals with a fall-through default. The previous form
         // mapped anything it did not recognise onto the compensation parameter, so a control added
         // later would silently dial in latency instead of doing its own job. These numbers are

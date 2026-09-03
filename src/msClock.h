@@ -162,6 +162,16 @@ double ms_clock_residual_ms(const tMsClock * clock);
 // thousands of blocks will bury one bad block, and one bad block is a bunched pair of ticks.
 double ms_clock_residual_worst_ms(const tMsClock * clock);
 
+// CLEAR THE MODEL'S OWN FIGURES WITHOUT TOUCHING THE MODEL. The residual sums, the worst block and
+// the resync count are statistics ABOUT the timebase model; nsPerQn, the anchors and haveBase are
+// the model itself and a running clock rides on them. So a "clear the figures" gesture must reset
+// the first set and leave the second alone - clearing the model would re-anchor the grid and put a
+// step into the clock, which is the opposite of what a button that only changes a readout should do.
+//
+// It exists because ms_stats_reset() alone would leave the log's "model |" line dividing a residual
+// accumulated since the run started by a raw figure accumulated since the clear.
+void ms_clock_reset_stats(tMsClock * clock);
+
 // LATENCY COMPENSATION IS A PHASE ADVANCE, NOT AN EARLIER SEND. This is the central lesson of the
 // first hardware session and it is worth stating at length, because the obvious mechanism is wrong
 // and fails in a way that looks like a tuning problem.

@@ -910,6 +910,21 @@ public:
         cycleFramesSoFar += (uint32_t)data.numSamples;
         haveCall          = true;
 
+        // THE PANEL'S CLEAR, TAKEN HERE AND NOWHERE ELSE. The UI raises status->clearRequest and the
+        // audio thread - which owns every one of these figures - is what acts on it, so no other
+        // thread ever writes the accumulators. Exchanged rather than tested and cleared, so a click
+        // landing between the two halves of that pair cannot be lost.
+        //
+        // BEFORE ms_stats_block(), so this block is the first of the new run rather than the last of
+        // the old one. And the model's own figures go with it: leaving them would have the log's
+        // "model |" line divide a residual accumulated since the run started by a raw figure
+        // accumulated since the clear, and call the answer a percentage.
+        if ((status != nullptr) && (atomic_exchange(&status->clearRequest, 0u) != 0u)) {
+            ms_stats_reset(stats);
+            ms_clock_reset_stats(&clock);
+            ms_log_line("figures cleared from the panel");
+        }
+
         // WHERE THE MUSICAL POSITION SHOULD HAVE GOT TO, if nothing jumped. Anything else is a loop
         // wrap, a playhead move or a tempo change taking effect - and those are the events a clock
         // generator has to handle correctly, so they are logged the moment they happen rather than

@@ -3,6 +3,22 @@ MidiSyncTool TO TEST
 Finished code that is built but not yet checked against a real host.
 Confirmed -> delete the line. Check failed -> move it to todo.txt.
 
+- THE "CLEAR THESE FIGURES" BUTTON (2026-09-03), on the Clocks sent / Fitted grid row. Let a run
+  build up a worst case, press it, and check that commit margin, late clocks, block jitter AND its
+  worst case, the drift window, the measured BPM and the trace all go back to nothing together -
+  and that the MEASURED DEVICE figures below do NOT. The log should carry one "figures cleared from
+  the panel" line per press.
+- THAT THE CLEAR DOES NOT DISTURB THE CLOCK, which is the thing that would make it worse than
+  useless: press it mid-run with hardware listening and confirm no audible step, 0 late clocks
+  across the press, and that the commit margin comes straight back to where it was rather than
+  climbing from zero. ms_clock_reset_stats() is written to touch the model's FIGURES and not the
+  model, and this is the check that says so.
+- THE SHORTER WINDOW (2026-09-03), MS_CANVAS_H 890 -> 830. Measured with a stubbed renderer to end
+  at 816 with a 14-unit margin in all seven arrangements, but that is the LOGICAL canvas: check in
+  Live that the window itself came out proportionally shorter, that the trace did not lose its
+  height, and that nothing is clipped at the bottom in the tallest arrangement - Generate + measure,
+  running, with a clock source chosen and both the dropout and split rows showing.
+
 - THE WINDOWED HOST BLOCK JITTER (2026-09-03). The "Host block jitter" row now reads
   "0.212 ms RMS over 9.9 s  (worst ever +5.209)". Watch the span climb to 10.0 s and stay there,
   and check it reads shorter at a small buffer - at 32 frames the ring saturates and it should

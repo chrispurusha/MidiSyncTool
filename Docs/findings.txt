@@ -78,6 +78,53 @@ residual by the raw block jitter, and ms_clock_residual_ms() is itself an all-ti
 blocks; pairing it with a ten-second denominator would put two different spans either side of a
 division and call the answer a percentage. So the log carries both and the panel shows the recent.
 
+AND THE CLEAR EXISTS NOW. msStats.h had advertised one in a comment since the file was written -
+"the UI's 'clear'" - and there was none; only a transport start and the monitor-mode boundary called
+ms_stats_reset(). It is a button on the Clocks sent / Fitted grid row, which is the first row of the
+group it clears, and it clears that whole group: commit margin, late clocks, block jitter and its
+worst case, the drift window, the measured tempo and the trace. Not the measured device, which has
+its own lifecycle.
+
+A CLEAR IS AN ACTION AND MUST NOT BE A VST3 PARAMETER, which is what made the route interesting. A
+parameter is the sanctioned way from controller to processor and everything else on this panel uses
+it - but a parameter is automatable and is SAVED IN THE PROJECT, so a momentary "clear" would be
+recallable and a project reloaded with it saved as 1 would clear the figures on load. It goes
+through tMsStatus instead, as the one field in there written by the UI and consumed by the audio
+thread; the audio thread takes it with an atomic_exchange, so a click landing between a test and a
+clear cannot be lost, and the accumulators are still written by exactly one thread.
+
+IT ALSO CLEARS THE MODEL'S FIGURES, through a new ms_clock_reset_stats(), and the distinction that
+call is built on is the one that matters: the residual sums, the worst block and the resync count
+are statistics ABOUT the timebase model, while nsPerQn, the anchors and haveBase ARE the model and a
+running clock rides on them. Clearing the second set would re-anchor the grid and put a step into
+the clock - a button that only changes a readout must not touch the output. Clearing neither would
+leave the log's "model |" line dividing a residual accumulated since the run started by a raw figure
+accumulated since the clear.
+
+AND THE WINDOW GOT SHORTER, 890 -> 830 units. Reported as blank space at the bottom, and it was: the
+trace absorbs whatever the content above does not use, but only up to MS_GRAPH_MAX_H, and past that
+cap the remainder goes back to being a hole - at the bottom this time instead of the middle. So the
+earlier claim that "too tall only costs a taller trace" was true only up to the cap.
+
+MEASURED RATHER THAN EYEBALLED, by stubbing SynthLib's renderer and recording the lowest pixel any
+draw call asked for, across seven arrangements:
+
+    canvas   shortest arrangement        tallest arrangement
+     890     bottom 816, blank 74        bottom 876, blank 14
+     850     bottom 816, blank 34        bottom 836, blank 14
+     830     bottom 816, blank 14        bottom 816, blank 14   <- every arrangement, exactly
+     810     bottom 796, blank 14        bottom 800, blank 10
+     790     bottom 776, blank 14        bottom 800, blank -10  <- collides
+
+830 is the TOP of the range that works, and the top is the right end of it. The tallest arrangement
+bottoms out at 800 once the trace is squeezed to MS_GRAPH_MIN_H, so anything from 814 up leaves no
+gap - but 830 keeps 16 units of slack in the trace, so a row added later still shortens the trace
+before anything collides. Trimming to 814 would spend that safety margin to save 16 units of window.
+
+The stub harness is worth keeping in mind as a technique: msDraw.c needs eighteen symbols stubbed to
+link on its own, none of them hard, and it then reports its own layout for any arrangement without a
+host, a window or a GPU. Three of the numbers above could not have been read off a screenshot.
+
 FOUND WHILE LOOKING AT THIS, a separate bug in ms_stats_reset(): it cleared every accumulated figure
 but not framesMin, framesMax, sizeChanges or prevFrames - while publishing zeros for all of them. So
 a reset blanked the block-size range on screen for exactly one block and the stale values came
@@ -93,9 +140,6 @@ every occasion it has been applied. Fixed; the same run now reads 256..256 with 
 unrelated to the window: the window changes what the RMS means, and this is about which fields a
 reset touches, so it stands on its own.
 
-Still not built, and still worth having: a UI "clear", which msStats.h has advertised in a comment
-since the file was written ("the UI's 'clear'") and which does not exist. Only a transport start and
-the monitor-mode boundary call ms_stats_reset() today.
 
 
 2026-09-03  A CLOCK INPUT - AND A STALE BUNDLE THAT LOOKED LIKE A REGRESSION

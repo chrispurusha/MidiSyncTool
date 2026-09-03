@@ -128,6 +128,8 @@ static tRectangle button_face(tRectangle box) {
 // everything above it. Same arrangement as gControlTop: the frame decides where it is and what it
 // would set, the click only reads that back.
 static tRectangle gApplyBox;
+static tRectangle gClearBox;
+static bool       gClearLive = false;  // false until a frame has placed the rect
 static double     gApplyMs   = 0.0;    // what it would dial in, in milliseconds
 static bool       gApplyLive = false;  // whether there is a measurement behind it at all
 
@@ -611,6 +613,28 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
     control_row(4, "Clock in", label, false, true);
 
     y           = gControlTop + ((double)MS_ROWS * ROW_GAP) + 6.0;
+
+    // THE CLEAR, ON THE FIRST ROW OF THE FIGURES IT CLEARS rather than on a row of its own, which is
+    // the same bargain the "Use measured" button strikes lower down: the canvas has no height to
+    // spare and a button beside the first of a group reads as belonging to the group.
+    //
+    // WHAT IT CLEARS IS EVERYTHING FROM HERE TO THE BPM ROW - commit margin, late clocks, block
+    // jitter and its worst case, the drift window, the measured tempo, the trace - because that is
+    // exactly what ms_stats_reset() covers and a button that cleared some of a group would be worse
+    // than none. It does NOT touch the measured device, which has its own lifecycle, and it does not
+    // disturb the running clock: see ms_clock_reset_stats().
+    //
+    // IT IS THE WORST CASE THAT MAKES IT WORTH HAVING. The RMS forgets on its own now, over
+    // MS_STATS_WINDOW_SECONDS; the worst case deliberately does not, so once a hiccup you already
+    // know about is in it, only this gets it out of the way so the next one is visible.
+    gClearBox  = (tRectangle){{372.0, y - 4.0}, {166.0, 18.0}};
+    gClearLive = true;
+
+    set_rgb_colour((tRgb){0.20, 0.22, 0.28});
+    render_rectangle(mainArea, gClearBox);
+    set_rgb_colour((tRgb){0.78, 0.82, 0.88});
+    render_text(mainArea, (tRectangle){{gClearBox.coord.x + 8.0, gClearBox.coord.y + 4.0},
+                                       {0.0, 11.0}}, "Clear these figures");
 
     if (monitor) {
         // CLOCKS SENT IS ZERO BY DESIGN HERE and saying so is better than showing the zero, which
@@ -1109,6 +1133,14 @@ bool ms_draw_click(double x, double y, tMsEditRequest * request) {
     // THE BUTTON FIRST, because it is the only control outside the row block and its rect is
     // whatever the last frame put it at - gated on gApplyLive so a stale rect from before a mode
     // change cannot be clicked into a value.
+    if (gClearLive && hit(gClearBox, x, y)) {
+        // NO VALUE, because there is nothing to set - see eMsEditClearStats. The editor turns this
+        // into a post on tMsStatus rather than a parameter edit.
+        request->which      = eMsEditClearStats;
+        request->normalized = 0.0;
+        return true;
+    }
+
     if (gApplyLive && hit(gApplyBox, x, y)) {
         double ms = gApplyMs;
 

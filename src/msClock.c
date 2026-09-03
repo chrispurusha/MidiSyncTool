@@ -44,6 +44,16 @@ double ms_clock_residual_worst_ms(const tMsClock * clock) {
     return (clock != NULL) ? clock->modelWorstMs : 0.0;
 }
 
+void ms_clock_reset_stats(tMsClock * clock) {
+    if (clock == NULL) {
+        return;
+    }
+    clock->modelErrorSumSq = 0.0;
+    clock->modelWorstMs    = 0.0;
+    clock->modelBlocks     = 0;
+    clock->modelResyncs    = 0;
+}
+
 void ms_clock_init(tMsClock * clock) {
     memset(clock, 0, sizeof(*clock));
     clock->destination = -1;

@@ -34,6 +34,18 @@ extern "C" {
 
 typedef struct {
     atomic_bool active;
+
+    // THE ONE FIELD THAT TRAVELS THE OTHER WAY - written by the UI thread, consumed by the audio
+    // thread, which is the reverse of everything else in here and so is worth calling out rather
+    // than leaving to be noticed.
+    //
+    // A CLEAR IS AN ACTION AND MUST NOT BE A PARAMETER. VST3 parameters are the sanctioned route
+    // from controller to processor, but a parameter is automatable and is saved in the project -
+    // so a momentary "clear" would be recallable, and a project reloaded with it saved as 1 would
+    // clear the figures on load. This is a post, not a value: the UI raises it, the audio thread
+    // takes it with an exchange, and nothing anywhere remembers it afterwards.
+    atomic_uint clearRequest;
+
     char        destName[128];
     atomic_int  haveDestination;
 

@@ -21,17 +21,33 @@ extern "C" {
 // The logical canvas. Every coordinate is in these units and scales to whatever surface the host
 // gives us, so the panel is the same shape at any window size.
 #define MS_CANVAS_W    (560.0)
-// TALL ENOUGH FOR WHAT IS ON IT. The content ran to about 740 units while this said 600, which put
-// the graph off the bottom of the window.
+// TALL ENOUGH FOR WHAT IS ON IT, AND NO TALLER. The content ran to about 740 units while this said
+// 600, which put the graph off the bottom of the window.
 //
 // THE GRAPH NO LONGER HANGS OFF THIS NUMBER (2026-09-03). It was anchored to the canvas bottom so a
 // row added above could never push it off the edge; what that actually did was leave the sections'
 // own variation - a clock source chosen or not, a held run, the dropout and split rows, some 130
 // units between them - on screen as a hole under the latency breakdown. The graph now follows the
-// content and spends the remainder on its own height, so this only has to be big enough for the
-// TALLEST arrangement plus a minimum trace: 758 units of content, then 26 + 20 to the graph's top
-// and MS_GRAPH_MIN_H + caption + margin below it. Too tall costs a taller trace, not a gap.
-#define MS_CANVAS_H    (890.0)
+// content and spends the remainder on its own height.
+//
+// "TOO TALL ONLY COSTS A TALLER TRACE" WAS TRUE ONLY UP TO MS_GRAPH_MAX_H, which is where 890 was
+// wrong. Past that cap the trace stops absorbing and the remainder goes back to being a hole - at
+// the bottom this time. MEASURED by stubbing the renderer and recording the lowest pixel any draw
+// call asked for, across seven arrangements:
+//
+//     canvas   shortest arrangement        tallest arrangement
+//      890     bottom 816, blank 74        bottom 876, blank 14
+//      850     bottom 816, blank 34        bottom 836, blank 14
+//      830     bottom 816, blank 14        bottom 816, blank 14   <- every arrangement, exactly
+//      810     bottom 796, blank 14        bottom 800, blank 10   <- the tallest starts to lose it
+//      790     bottom 776, blank 14        bottom 800, blank -10  <- and then collides
+//
+// 830 is the top of the range that works. The tallest arrangement bottoms out at 800 once the trace
+// is squeezed to MS_GRAPH_MIN_H, so anything from 814 up leaves no gap - but 830 keeps the trace as
+// tall as it can be AND keeps 16 units of slack in it, so a row added later still shortens the
+// trace before anything collides. That is the property worth having, and it is the reason not to
+// trim to 814.
+#define MS_CANVAS_H    (830.0)
 
 // The trace's own geometry. MIN is what guarantees a crowded panel collides visibly instead of
 // drawing off the edge; MAX stops a short arrangement - clock-only with no source chosen and
@@ -41,8 +57,14 @@ extern "C" {
 #define MS_GRAPH_CAPTION_H   (14.0)
 #define MS_GRAPH_MARGIN_H    (14.0)
 
-// A click landed on a control the HOST must be told about, because these are VST3 parameters and
-// changing one behind the host's back would leave its automation and its saved state wrong.
+// A click landed on something the panel cannot act on by itself.
+//
+// ALL BUT THE LAST ARE VST3 PARAMETERS, and those must go to the HOST rather than straight to the
+// processor - changing one behind the host's back would leave its automation and its saved state
+// wrong. eMsEditClearStats is the exception and is deliberately NOT a parameter: it is an action
+// with no value and nothing to recall, so it goes to the processor through tMsStatus instead. Any
+// new member has to be sorted into one of those two kinds before it is added, because the editor's
+// switch on this enum decides which route it takes.
 typedef enum {
     eMsEditNone = 0,
     eMsEditMidiDest,
@@ -50,6 +72,7 @@ typedef enum {
     eMsEditCompensate,
     eMsEditMode,
     eMsEditClockSource,
+    eMsEditClearStats,
 } tMsEdit;
 
 typedef struct {

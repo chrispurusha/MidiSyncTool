@@ -15,7 +15,6 @@ Open decisions (see Docs/design.md)
 Build
 
 - First plug-in built 2026-09-02: loads, logs ProcessContext. NOT yet run in Live - see to-test.txt
-- A UI "clear" for the host-timing figures: msStats.h has advertised one in a comment since it was written, only a transport start and the monitor boundary call ms_stats_reset() - it needs a UI-to-audio flag in tMsStatus, since a clear is an action and not a parameter
 - Calibrate note-on/off latency as well as clock: send notes instead of clock and measure the audio onset the same way, so the device's note latency and its clock latency are separate data points rather than one blended figure
 - Calibration needs to GUIDE the user (pattern, audio routing, MIDI port) and check each step, not present a CALIBRATE button that silently returns a wrong number
 - mstDriver models loop wraps, tempo ramps (--ramp), varying block sizes (--vary) and Live's loop-boundary block split (--split, 2026-09-03): still needs playhead jumps while stopped
