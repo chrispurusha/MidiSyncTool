@@ -1375,3 +1375,57 @@ mechanism and cannot measure the improvement - Live is the reference, as ever.
 NOTE FOR ANYTHING THAT READS THE PANEL: "Host block jitter" figures from before this build are not
 comparable with figures after it, on any host that splits. A new row says so - it appears only when
 splitting has actually happened, and gives the count.
+
+
+2026-09-03  WHICH NUMBER SETS THE COMPENSATION - AND THE PANEL WAS SAYING THE WRONG ONE
+------------------------------------------------------------
+CT asked what to type into Compensation given what the panel shows. Four plausible figures were on
+screen and three of them are wrong, which is a fault in the panel rather than a gap in the reading.
+
+THE ANSWER: the DEVICE term - the breakdown's last bar, round trip minus the host buffer. Not the
+round trip, and not the total. ms_clock_set_compensation_ms() has said so since it was written -
+"Pass the DEVICE's round trip; the schedule lead is added here" - so the lead must not be included
+either.
+
+WHY THE ROUND TRIP IS NOT IT. msDetect.h:20 states what the figure is: stamp to the moment the
+transient appeared in a buffer THIS PLUG-IN WAS HANDED. That is a loop, and the way back - the
+host's input buffer and the interface's A/D - delays when the plug-in SEES the sound, not when the
+sound exists. A phase advance is a change to when the device is played, so advancing by the return
+path plays it early. At 512 frames the host buffer alone is 10.67 ms.
+
+WHAT WAS WRONG ON THE PANEL:
+
+  - "Total musical delay" showed lead + ROUND TRIP, and "Residual" showed total - compensation. So
+    the panel's own arithmetic said: set compensation until Residual reads zero, i.e. to
+    lead + round trip. That double-counts the lead (the clock adds it again) AND cancels the return
+    path - about 20 ms early at 512 frames.
+  - The one hardware application on record (findings 2026-09-02) used 21.9 ms, the full measured
+    round trip, on a rig the same entry describes as containing the QU-24's A/D and a 512-frame
+    input buffer. That entry says NOT YET VERIFIED END TO END, which is consistent: the run proved
+    the phase advance did not wreck the jitter, not that the sound landed on the beat.
+
+NOW: "Musical delay" = lead + device, shown as its two parts. "Compensation" shows the setting AND
+the advance it produces (setting + lead), because those are not the same number and the difference
+is not the reader's to remember. "Residual" = device - compensation, which the lead cancels out of.
+
+AND A BUTTON, because a caption explaining the choice to every reader for ever is worse than getting
+it right once: "Use measured" on the Compensation row applies the device term through the parameter,
+so the host's automation and saved state see it like any other edit. Live whenever there is a
+measurement behind it, INCLUDING when the figures are held - measure, switch to Clock only, apply is
+the actual workflow.
+
+STILL NOT HONEST, and labelled as such: the device term is round trip minus the host buffer only,
+because inputPathMs is zero until an audio loopback measures the converter. So the button
+over-compensates by the A/D. The bar is called "Device + interface" for that reason and becomes
+"Device MIDI to audio" the moment the loopback fills the term in.
+
+WORTH NOTING THE ORDER OF EVENTS: this figure was ALSO wrong for a second reason until this morning.
+"known" subtracts blockMs, and blockMs was being published from the last process() call - which at a
+loop boundary was a split fragment. The device term jumped every time round the loop along with the
+bars. Both are fixed; the split fix had to land first for this one to mean anything.
+
+OPEN, and now on the todo: ms_clock_set_compensation_ms's advance is gated on compensationMs != 0.0.
+With compensation off nothing cancels the lead, so the whole grid goes out MS_LOOKAHEAD_MS late; and
+setting X then returning to 0 mid-run skips the branch, leaving the old advance folded into the
+phase until the next transport start. Not fixed here because it changes what every compensation
+figure recorded so far means, which is CT's call.

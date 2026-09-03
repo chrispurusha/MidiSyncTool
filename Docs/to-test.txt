@@ -3,6 +3,22 @@ MidiSyncTool TO TEST
 Finished code that is built but not yet checked against a real host.
 Confirmed -> delete the line. Check failed -> move it to todo.txt.
 
+- THE "USE MEASURED" BUTTON (2026-09-03), on the Compensation row of the LATENCY BREAKDOWN. Measure
+  a device in Generate + measure, switch to Clock only so the figures go HELD, and press it: the
+  Compensation row should take the DEVICE term - the breakdown's last bar - and the Residual row
+  should drop to +0.00. Live's own generic parameter panel should show the same value, since the
+  button goes through the parameter rather than round the host's back. It must stay clickable while
+  the figures are held; that is the workflow it exists for.
+- THAT THE BUTTON'S VALUE IS THE RIGHT ONE, which no click can prove: it is the round trip MINUS the
+  host buffer, and it still contains the interface's A/D because inputPathMs is zero until an audio
+  loopback measures it. So it over-compensates by the converter, sub-millisecond to a couple of ms.
+  The end-to-end check is still the one findings 2026-09-02 asks for - the host's own audio as a
+  reference, QU-24 out 29 patched back to an input.
+- THE ROWS AROUND IT, which changed meaning: "Total musical delay" (lead + round trip) is now
+  "Musical delay" (lead + device) and Residual is now device - compensation rather than
+  total - compensation. Check by eye that the compensation row's value does not run under the
+  button at x 372, at a compensation of 100.0 ms which is the longest it gets.
+
 - THE SPLIT-BLOCK FIX AT A LOOP BOUNDARY (2026-09-03), and the reading that settles it. Set a 512
   frame buffer, loop a bar, play for a few minutes and watch "Host block jitter". THE NUMBER TO
   READ IS THE WORST CASE BESIDE THE RMS, not the RMS: before the fix it walked up towards a whole

@@ -124,6 +124,13 @@ static tRectangle button_face(tRectangle box) {
     return box;
 }
 
+// THE "USE MEASURED" BUTTON, laid out by the frame because it sits on a row whose y follows
+// everything above it. Same arrangement as gControlTop: the frame decides where it is and what it
+// would set, the click only reads that back.
+static tRectangle gApplyBox;
+static double     gApplyMs   = 0.0;    // what it would dial in, in milliseconds
+static bool       gApplyLive = false;  // whether there is a measurement behind it at all
+
 static double    gMode       = 0.0; // normalised tMsMode - see ms_mode_from_normalized()
 static double    gClockSource = 0.0; // normalised MIDI SOURCE slot, 0 = none
 static double    gControlTop = 0.0; // set by the frame, since it follows the sections above it
@@ -914,19 +921,70 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
          remainder, total, haveTrip, (tRgb){0.85, 0.55, 0.30}, breakdownLive);
     y += 19.0;
 
-    snprintf(buffer, sizeof(buffer), "%.2f ms", total);
-    stat_at(28.0, y, "Total musical delay", haveTrip ? buffer : "-", breakdownLive);
+    // ONLY TWO OF THE FOUR BARS ARE DELAY THE MUSIC SUFFERS, and this row is where that stops being
+    // implicit. The bars decompose the measured LOOP - stamp to transient - and half that loop is
+    // the way back: the host's input buffer and the interface's A/D delay when this plug-in SEES
+    // the sound, not when the sound exists. Advance the grid by them and the device plays early.
+    //
+    // The row used to read "Total musical delay" and to show lead + round trip, which is the loop.
+    // It was the panel's instruction for setting compensation and it was the wrong instruction by
+    // one host buffer plus a converter - 10.7 ms at 512 frames before the A/D is counted.
+    snprintf(buffer, sizeof(buffer), "%.2f ms   =  %.2f lead + %.2f device", lead + remainder,
+             lead, remainder);
+    stat_at(28.0, y, "Musical delay", haveTrip ? buffer : "-", breakdownLive);
     y += 16.0;
 
     // COMPENSATION IS THE ONE LIVE LINE IN A HELD BREAKDOWN, because it is still being applied: a
     // phase advance on a clock that is still going out. That is exactly why it is worth keeping the
     // figures above it on screen at all.
-    snprintf(buffer, sizeof(buffer), "%.2f ms", compensat);
-    stat_at(28.0, y, "Compensation", (compensat != 0.0) ? buffer : "off", sending);
+    //
+    // THE ADVANCE IS SHOWN BESIDE THE SETTING, because they are not the same number and the
+    // difference is not the user's to remember: ms_clock_set_compensation_ms() takes the DEVICE's
+    // figure and adds the schedule lead itself. Without both on screen, "17 ms" set against a
+    // "27 ms" musical delay reads like a value 10 ms short of the job.
+    if (compensat != 0.0) {
+        // SHORT ON PURPOSE: the button sits at x 372 on this same row, and the value text starts
+        // at 178. A longer sentence than this runs under it.
+        snprintf(buffer, sizeof(buffer), "%.2f ms  (advance %.2f)", compensat, compensat + lead);
+    } else {
+        snprintf(buffer, sizeof(buffer), "off");
+    }
+    stat_at(28.0, y, "Compensation", buffer, sending);
+
+    // THE BUTTON, on the compensation row rather than a line of its own - it acts on that row, and
+    // a row of its own would cost height the canvas does not have spare.
+    //
+    // IT EXISTS BECAUSE THE PANEL COULD NOT ANSWER "WHICH FIGURE DO I TYPE IN". Four plausible
+    // numbers were on screen - the round trip, the device term, the loop total, the lead - and
+    // three of them are wrong. A button that applies the right one is a smaller thing to get right
+    // once than a caption explaining the choice to every reader for ever.
+    //
+    // LIVE WHENEVER IT HAS SOMETHING TO APPLY, including when the figures are HELD, because that is
+    // the actual workflow: measure in Generate + measure, switch to Clock only so the drum machine
+    // stops being listened for, then apply. It is an action, not a reading, so it does not dim with
+    // the numbers around it.
+    gApplyMs   = remainder;
+    gApplyLive = haveTrip && (remainder > 0.0);
+    gApplyBox  = (tRectangle){{372.0, y - 4.0}, {166.0, 18.0}};
+
+    set_rgb_colour(gApplyLive ? (tRgb){0.22, 0.34, 0.30} : (tRgb){0.15, 0.15, 0.17});
+    render_rectangle(mainArea, gApplyBox);
+
+    if (gApplyLive) {
+        snprintf(buffer, sizeof(buffer), "Use measured  %.2f ms", remainder);
+    } else {
+        snprintf(buffer, sizeof(buffer), "Use measured  -");
+    }
+    set_rgb_colour(gApplyLive ? (tRgb){0.86, 0.92, 0.88} : (tRgb)MS_HELD_CAPTION);
+    render_text(mainArea, (tRectangle){{gApplyBox.coord.x + 8.0, gApplyBox.coord.y + 4.0},
+                                       {0.0, 11.0}}, buffer);
     y += 16.0;
 
-    // What is left after compensation - the number that says whether the job is done.
-    snprintf(buffer, sizeof(buffer), "%+.2f ms", total - compensat);
+    // WHAT IS LEFT ONCE THE GRID HAS BEEN ADVANCED - the number that says whether the job is done,
+    // and it is against the DEVICE term, not the loop. The advance is compensation + lead and the
+    // delay is device + lead, so the lead cancels and what remains is device - compensation. Set
+    // the compensation from the button and this reads zero, which is the whole point of showing it.
+    snprintf(buffer, sizeof(buffer), "%+.2f ms", remainder - compensat);
     stat_at(28.0, y, "Residual", haveTrip ? buffer : "-", breakdownLive);
 
     // ---- the verdict and the trace ----
@@ -1032,6 +1090,22 @@ bool ms_draw_click(double x, double y, tMsEditRequest * request) {
             return true;
         }
         return true;    // consumed, whether it chose something or dismissed
+    }
+
+    // THE BUTTON FIRST, because it is the only control outside the row block and its rect is
+    // whatever the last frame put it at - gated on gApplyLive so a stale rect from before a mode
+    // change cannot be clicked into a value.
+    if (gApplyLive && hit(gApplyBox, x, y)) {
+        double ms = gApplyMs;
+
+        if (ms < 0.0) {
+            ms = 0.0;
+        } else if (ms > MS_COMPENSATE_MAX) {
+            ms = MS_COMPENSATE_MAX;
+        }
+        request->which      = eMsEditCompensate;
+        request->normalized = ms / MS_COMPENSATE_MAX;
+        return true;
     }
 
     if (hit(row_value(0), x, y)) {

@@ -41,7 +41,8 @@ Build
 - Sweep probe velocity and report the mean per velocity, which is the only way to know what the onset detector's level bias is worth on a given sound
 - Onset detection is level-biased by design; measure how much by sweeping velocity once a pattern exists, and say whether it needs correcting
 - Detector division is MST_DETECT_DIV until there is a panel; it should be derived from the pattern or chosen by the user
-- CALIBRATE button on the panel: run the note probe and seed the compensation from what it measures
+- CALIBRATE button on the panel: run the note probe and seed the compensation from what it measures - the applying half exists now ("Use measured", 2026-09-03), the RUNNING half does not
+- ms_clock_set_compensation_ms is gated on compensationMs != 0.0, so with compensation off the schedule lead is never cancelled and the whole grid runs MS_LOOKAHEAD_MS late; and going from X back to 0 mid-run leaves the old advance in the phase until the next transport start
 - Audio loopback to separate the interface's A/D from the device, so the breakdown's last row can be called device latency honestly
 - msDevice.c and msRing.c are verbatim copies of GenBridge's - both sets belong in SynthLib once the audio/MIDI selector work is done
 - Drift needs a long window to mean anything: tick quantisation alone moves it hundreds of ppm over a few seconds. Say so on the display rather than showing a figure that swings
