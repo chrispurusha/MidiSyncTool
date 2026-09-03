@@ -16,13 +16,18 @@ Build
 - First plug-in built 2026-09-02: loads, logs ProcessContext. NOT yet run in Live - see to-test.txt
 - Calibrate note-on/off latency as well as clock: send notes instead of clock and measure the audio onset the same way, so the device's note latency and its clock latency are separate data points rather than one blended figure
 - Calibration needs to GUIDE the user (pattern, audio routing, MIDI port) and check each step, not present a CALIBRATE button that silently returns a wrong number
-- mstDriver models loop wraps only: add tempo ramps, transport start/stop, playhead jumps while stopped and buffer-size changes as the scheduler needs them
+- mstDriver models loop wraps, tempo ramps (--ramp) and varying block sizes (--vary, both 2026-09-03): still needs playhead jumps while stopped
 - Loop wrap: infer the wrap sample offset rather than trusting ppq, which snaps to the loop start for one block - see findings 2026-09-02
 - JUMP tolerance is 1e-6, too tight: a tempo ramp logs twenty lines of noise. Scale it to a fraction of a block
 - Verify compensation end to end: needs the host's own audio as a reference, so QU-24 out 29 patched back to an input
+- The harness round trip reads ~4.5 ms LONGER than Live's for the same rig; suspected capture-ring priming in mstDriver. Confirm, because compensation seeded from a harness run would over-compensate by about a block
 - The first L + D of a run is uncompensated because the grid cannot be advanced before the transport starts; consider a pre-roll if it ever matters
 - Subtract the constant audio-path terms so the figure can be called device latency rather than round trip - msDevice.c already reports them
 - Audio loopback calibration: emit a click from the plug-in's own output and detect its return, measuring the interface path on its own with no drum machine in it
+- Audio loopback is now the ONLY way to push the budget further: the wire is 1 % of total jitter and USB+Tempest+A/D is 98 % (findings 2026-09-03)
+- Test whether USB framing is the 0.184 ms downstream term: uniform jitter over a 1 ms USB frame would be 0.289 ms RMS, and 0.184 is 0.64 of that
+- Minimum-filter the model observation (NTP-style, lateness is one-sided) and/or a 2-state Kalman: both sound, both currently unobservable downstream - do not build until something downstream improves 10x
+- The rate term costs ~0.006 ms of wire jitter and buys ~10 us of standing offset; revisit only if the wire ever becomes the dominant term again
 - Sweep probe velocity and report the mean per velocity, which is the only way to know what the onset detector's level bias is worth on a given sound
 - Onset detection is level-biased by design; measure how much by sweeping velocity once a pattern exists, and say whether it needs correcting
 - Detector division is MST_DETECT_DIV until there is a panel; it should be derived from the pattern or chosen by the user

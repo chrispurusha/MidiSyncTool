@@ -528,3 +528,260 @@ never push it off again. A collision is visible; a control drawn past the edge i
 The telemetry log line was gated on ticks having been sent, which meant a run with no destination
 chosen produced no telemetry at all - exactly the run someone diagnosing a silent plug-in would be
 looking at. Gated on the window instead.
+
+2026-09-02  HOST JITTER IS NOW FILTERED OUT, and it was not before
+------------------------------------------------------------------------------
+CT asked whether the 0.232 ms of host block jitter Live was showing was being compensated. It was
+not: every tick was stamped from AudioGetCurrentHostTime() read at the top of process(), so a block
+delivered late by d carried every tick in it d late. All of the host's jitter was going onto the
+wire, and the panel was reporting the cause while doing nothing about it.
+
+This is the failure the concept names in section 2 - "do not simply react to instantaneous arrival
+times... estimate the underlying phase and rate and independently schedule the cleanest possible
+output". It applies to the HOST'S OWN timing quite as much as to an incoming clock, which is not
+obvious until someone asks.
+
+THE MODEL. A line through musical time against the wall clock: an anchor (musical position, mach
+time) and a rate. Each block is one observation; the model is nudged towards it with a PI
+correction; the ticks are stamped from THE MODEL rather than from the observation. A late block
+therefore moves the output by Kp of its error instead of by all of it.
+
+The rate term is not redundant with knowing the tempo. Tempo says how many quarter notes a second of
+AUDIO time holds; the stamps are mach time, and the two are different crystals - 19 ppm apart on this
+rig, which is 190 microseconds over ten seconds. Steady, and exactly what a phase-only correction
+would chase for ever.
+
+Musical time for the model is accumulated here (runQn) rather than taken from the host's reported
+position, which goes backwards at every loop wrap. A resync threshold of 30 ms separates a seek, a
+tempo change taking effect or a dropout from jitter: those re-anchor outright and are counted, rather
+than being filtered through - smoothing across one would drag the output over seconds of wrong time.
+
+MEASURED, on the same 130 BPM clock into IAC:
+
+  host pacing            block jitter     delivered clock, before     after
+  usleep harness          0.378 ms RMS          0.970 ms RMS       0.034 ms RMS
+  QU-24 callback          0.009 ms RMS          0.033 ms RMS       0.018 ms RMS
+
+A factor of 28 on the deliberately jittery host, and it improves the clean one too. The usleep
+harness, which has spent this whole project misattributing its own overshoot to the plug-in, turns
+out to be the ideal adversary for this: a host that is genuinely bad at delivering blocks on time.
+
+The panel shows the pair - "Host block jitter" and "after filtering" - because either number alone
+says nothing. The raw one on its own looks like a fault nothing is addressing; the residual on its
+own hides how much work is being done. Resyncs are shown beside the residual when there are any,
+since a residual that looks good because the model keeps re-anchoring is not a good residual.
+
+════════════════════════════════════════════════════════════════════════════════════════════════════
+2026-09-03  THE JITTER BUDGET, MEASURED END TO END - AND WHY THE WIRE IS FINISHED
+════════════════════════════════════════════════════════════════════════════════════════════════════
+
+Prompted by an observation from the panel in Live: the residual was reading AS BAD AS the raw host
+block jitter, which would mean the timebase model was doing nothing. It was not. The model was fine
+and the METRIC was lying, in two separate ways, both of them the same mistake.
+
+*** THE RESIDUAL WAS CONTAMINATED BY ITS OWN RE-ANCHORS. ***
+
+The residual is the step from one block's modelled base to the next, minus the nominal block
+duration. Work that through the model's own update and it comes out at exactly MS_MODEL_KP times the
+block's error - one PER CENT of the host's jitter at Kp 0.01. It can NEVER equal the raw figure. So
+any run where it does is measuring something other than what it claims.
+
+Two paths wrote a discontinuity into that step, and a sum of squares never forgets:
+
+  - A RESYNC. predictedNs is forced to observedNs, so the step contains the whole re-anchor jump,
+    worth up to MS_MODEL_RESYNC_MS. ONE resync in a thousand blocks is sqrt(30^2/1000) = 0.95 ms of
+    pure artefact - four times Live's 0.232 ms raw block jitter, from a single sample.
+  - THE FIRST BLOCK OF A RUN. The stopped path returns before the model runs, so lastBaseNs was left
+    over from before the stop while `restarted` zeroed modelErrorSumSq and modelBlocks - but never
+    haveBase. That block measured the entire STOPPED GAP as one residual sample. Seconds of it.
+    It only bites on the second and later runs of a session, which is why it was not seen at once.
+
+Fixed by dropping the base whenever it stops being continuous - haveBase = false on stop, on restart
+and on resync. haveBase was set true in exactly one place and cleared in NONE; that was the whole
+bug. modelWorstMs added alongside, because an RMS over thousands of blocks buries one bad block and
+one bad block is a bunched pair of ticks.
+
+MEASURED AFTER THE FIX, clock delivered into IAC and timed on arrival:
+
+  host pacing            raw block jitter   residual        wire jitter
+  QU-24 callback         0.008 ms RMS       0.0003 ms  4.3%  0.0134 - 0.0146 ms RMS
+  usleep harness         0.847 ms RMS       0.009 ms   1.1%  0.0232 ms RMS
+
+The 1.1 % against a genuinely bad host is Kp exactly, which is what says the loop is behaving as
+designed rather than accidentally. Zero resyncs in every run.
+
+*** THE RATE TERM WAS NEVER RUNNING UNDER TEMPO AUTOMATION. ***
+
+Separately, and found by reading rather than by measuring: the tempo-change branch re-derived nsPerQn
+from the new tempo, discarding the learned crystal ratio, and moved anchorQn to runQn. The rate term
+estimates slope error as errorNs/span with span measured FROM THE ANCHOR and is gated on span > 1.0
+quarter note - so moving the anchor set span back to one block, about 0.012 QN. A single tempo change
+therefore stalled rate learning for half a second; a tempo RAMP, which reports a change on every
+block, stalled it for ever and the model silently degraded to phase-only.
+
+Fixed by holding the slope as a RATIO of the tempo's nominal ns-per-quarter (so the crystal part
+survives a tempo change, a resync and a restart, while the tempo part is recomputed), and by
+re-sloping through the current predicted point WITHOUT moving anchorQn.
+
+HONESTLY, THE FIX COSTS MORE JITTER THAN IT SAVES, and the measurement says so. mstDriver gained
+--ramp for this, ramping 120 -> 150 BPM across the run the way Live's tempo automation does. Three
+runs each, usleep-paced, delivered into IAC:
+
+  pre-fix (rate term dead)    0.0158 / 0.0160 / 0.0192 ms RMS
+  post-fix (rate term live)   0.0221 / 0.0226 / 0.0227 ms RMS
+
+Reproducible, not noise. The rate term injects about 0.006 ms by actively correcting; the pre-fix
+build looked better precisely BECAUSE it was doing nothing, which is the same trap as a residual that
+looks good because the model keeps re-anchoring. Sweeping the span gate at 1 / 4 / 16 QN moved it
+not at all (0.0216 / 0.0217 / 0.0203), so the gate is not the mechanism.
+
+KEPT ANYWAY, and the next section is why: 0.006 ms is invisible downstream. What it buys is the
+standing phase offset a P-only loop cannot remove - rate error over Kp, which at 19 ppm and Kp 0.01
+is about 10 us - plus not relearning the crystal from scratch after every restart and glitch.
+
+*** THE BUDGET: THE WIRE IS 1 % OF IT, AND THE TOOL IS NOW MEASURING THE TRANSPORT ***
+
+Tempest on USB MIDI, its own sequencer clocked by us, audio returning on QU-24 inputs 15/16:
+
+  device | round trip mean 21.807 last 21.847 min 21.349 max 22.214 ms
+         | jitter RMS 0.185 peak dev 0.458 ms | hits 78 missed 0 spurious 0
+
+The 21.807 ms mean agrees with yesterday's 21.94 ms. The number that matters here is the 0.185 ms.
+
+The detector's own precision was then isolated by injecting a click digitally - no analogue path at
+all - PACED BY THE QU-24, which is the essential part:
+
+  device | round trip mean 10.009 min 9.988 max 10.051 ms | jitter RMS 0.013 peak dev 0.041 ms
+
+10.009 ms against an expected 10 (--inject-ms 20 less the 10 ms lookahead), so the detector is
+correct as well as precise. NOTE the same run WITHOUT --audio reported 0.464 ms, which is the usleep
+harness measuring its own overshoot again - see the standing warning about that harness. It is not a
+detector figure and must not be quoted as one.
+
+  stage                                     jitter RMS      share of total POWER
+  plug-in -> CoreMIDI -> wire               0.015-0.023 ms  ~1.2 %
+  onset detector + block quantisation       0.013 ms        ~0.5 %
+  USB + Tempest + QU-24 A/D  (by quadrature subtraction)
+                                            ~0.184 ms       ~98 %
+
+SO: REMOVING THE WIRE'S CONTRIBUTION ENTIRELY WOULD TAKE 0.185 ms TO 0.1839 ms. The difference
+between the pre-fix and post-fix builds moves the round trip by 0.0007 ms, against a peak deviation
+of 0.458 ms. Further de-jittering of the generated clock is unobservable on this rig.
+
+Worth noting where 0.184 ms probably comes from: a USB MIDI frame is 1 ms, and jitter uniform over
+1 ms has an RMS of 1/sqrt(12) = 0.289 ms. The measured 0.184 is 0.64 of that, which is consistent
+with USB framing being the dominant term. DIN is no escape - 31250 baud makes a single status byte
+320 us - so ~0.2 ms is close to the floor of MIDI itself whichever transport is used. UNCONFIRMED as
+a mechanism; the way to test it is the audio loopback below.
+
+WHAT THIS MEANS FOR THE IDEAS THAT PROMPTED THE SESSION. Minimum-filtering the observation the way
+NTP does (callback lateness is one-sided, so the least-late sample in a window is a better phase
+estimate than the mean) and replacing the PI with a 2-state Kalman are both sound, and both would
+reduce a term that is already 1/9th of the smallest thing downstream of it. NOT WORTH BUILDING until
+something downstream gets an order of magnitude better.
+
+STILL OPEN, and now the only way to push the 0.184 ms further apart: the audio loopback - QU-24
+out 29 patched back to in 15 - which measures the interface's own D/A + A/D with no drum machine in
+it. That is what would say how much of the 0.184 ms is USB and the Tempest and how much is the desk.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-03 (later)  LIVE: "THE FILTERED FIGURE IS HIGHER THAN THE RAW ONE" - AN OFF-BY-ONE IN BOTH
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+First run in Live with the model line, 130 BPM, 137 s:
+
+  model | block jitter raw 0.228 ms -> residual 0.279 ms RMS (122.6 % of raw) worst 5.267 ms
+        | 0 resync(s) over 25875 blocks
+  timing| ... block period RMS 0.229 worst +5.209 ms ...
+
+A residual ABOVE the raw figure is impossible for this filter - it works out to Kp times the block
+error - so the metric was wrong again, in a second and unrelated way. The tell is the pair of worst
+cases, 5.267 and 5.209 ms, agreeing with each other: 256 frames at 48 kHz is 5.33 ms. THAT IS A
+BLOCK-SIZE CHANGE BEING REPORTED AS A TIMING ERROR.
+
+*** BOTH PER-BLOCK FIGURES SUBTRACTED THE WRONG BLOCK'S NOMINAL DURATION. ***
+
+The wall time between callback n-1 and callback n is the time the device took to consume block
+n-1's samples. Both metrics subtracted block N's:
+
+  msStats:  errMs = (t[n] - t[n-1]) - nominal[n]
+  msClock:  runQn has not yet had this block's blockPpq added when predictedNs is computed, so the
+            step from the last base to this one spans block n-1 - and it too subtracted nominal[n]
+
+So each carried a term (nominal[n-1] - nominal[n]): the DIFFERENCE BETWEEN TWO CONSECUTIVE BLOCK
+SIZES. With a fixed block size that is identically zero, which is why it survived every offline run
+and every hardware run - a CoreAudio device hands over a constant block. Live varies it.
+
+Both now compare against the previous block's duration, and blockFramesMin/Max/sizeChanges were
+added to msStats with a "blocks |" log line that fires only when the host varies the size - because
+every per-block figure here assumes it does not, and nothing previously said whether that held.
+
+REPRODUCED OFFLINE with a new mstDriver --vary, which hands over 64..256 frames per call the way
+Live splits its buffer. 30 s, delivered into IAC, same plug-in but for the two comparison lines:
+
+  build                    raw block jitter   residual              wire
+  off-by-one (as Live)     1.912 ms           1.667 ms  87.2 %      0.0226 ms RMS
+  fixed                    0.492 ms           0.006 ms   1.2 %      0.0211 ms RMS
+
+THE WIRE IS THE SAME IN BOTH, which is the whole point: the generated clock was never affected and
+the ticks were always right. Note the RAW figure was inflated too, 1.912 -> 0.492, so both halves of
+the pair were wrong together - which is exactly why the pair still looked plausible and why "show the
+raw and the residual together" did not catch it. Constant-block runs are unchanged: QU-24 0.008 raw
+/ 0.000 residual, usleep 0.311 raw / 0.004 residual (1.3 %).
+
+LESSON, and it is the same one as the haveBase bug earlier today in a different disguise: a per-block
+figure that assumes a constant block size must SAY SO, and must be checked against a host that varies
+it. Two separate metrics had the identical fault, written at different times, because both inherited
+the assumption silently.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-03 (later still)  LIVE, WITH BOTH METRIC FAULTS FIXED - AND WHAT LIVE'S BLOCKS ACTUALLY DO
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Ableton, 130 BPM, ~52 s, Tempest clocked over USB with its audio returning on QU-24 15/16:
+
+  blocks | host block size VARIES: 8..256 frames, 86 change(s)
+  model  | block jitter raw 0.219 ms -> residual 0.003 ms RMS (1.6 % of raw) worst 0.100 ms
+         | 0 resync(s) over 10128 blocks
+  timing | commit margin mean +12.678 min +9.914 RMS 12.772 ms | late 0/2801
+         | block period RMS 0.219 worst -5.079 ms | drift -19.8 ppm
+  device | round trip mean 17.316 min 16.892 max 17.755 ms | jitter RMS 0.182 peak dev 0.438 ms
+         | hits 117 missed 0 spurious 0
+
+*** LIVE HANDS OVER BLOCKS OF 8 TO 256 FRAMES. *** First time this has ever been recorded, and it is
+the confirmation of the off-by-one diagnosis rather than an inference from it. About 86 changes in
+52 s - rare, ~1.6 per second, but a change from 248 frames to 8 is 5.0 ms and that is precisely the
+5.267 / 5.209 ms worst cases the previous run reported as "jitter".
+
+THE RESIDUAL IS NOW 1.6 % OF RAW IN LIVE, against 122.6 % before. The filter absorbs 98.4 % of the
+host's block timing error in the real host, which is what the offline figures always said it did and
+what neither metric was capable of showing. 0 resyncs in 10128 blocks.
+
+THE -5.079 ms WORST BLOCK PERIOD IS REAL, CORRECTLY MEASURED, AND NOT JITTER. Live calls process()
+more than once inside a single audio callback when it splits its buffer. The second sub-block arrives
+essentially zero wall time after the first, while the first genuinely represented ~5 ms of audio - so
+the figure is honest and the INTERPRETATION is what changes: in Live the raw block-period number is
+substantially sub-block SPLITTING, not late delivery. The model rides through it correctly, which is
+what the 1.6 % says.
+
+*** NO IMPROVEMENT IN ROUND-TRIP JITTER, AND NONE WAS AVAILABLE. ***
+
+  harness (QU-24-paced, pre-fix build)   jitter 0.185 ms RMS, peak dev 0.458 ms
+  Live    (both fixes in)                jitter 0.182-0.185 ms RMS, peak dev 0.438 ms
+
+Identical, exactly as the budget predicted: the generated wire is ~1 % of round-trip jitter POWER and
+USB + Tempest + A/D is ~98 %. Two days of work on the clock cannot move a number it contributes one
+per cent of. This is the measurement that closes the question - the clock is not the limit and has
+not been for some time.
+
+THE MEANS ARE NOT COMPARABLE AND THE DIFFERENCE IS NOT AN IMPROVEMENT: 21.807 ms in the harness
+against 17.316 ms in Live. Same Tempest, same desk, same MIDI path. The suspected cause is the
+harness's own capture ring - poc/ring.c holds several blocks and is primed with one before the first
+output callback, and one 256-frame block is 5.33 ms, which is the right order for the 4.5 ms gap.
+UNCONFIRMED. What matters practically is that the HARNESS FIGURE IS THE INFLATED ONE, so a
+compensation value seeded from a harness run would over-compensate by about a block. Live's 17.3 ms
+is the one to trust until the audio loopback settles it.
+
+MS_LOOKAHEAD_MS, the open question from the start: 0 late out of 2801 ticks with a minimum commit
+margin of +9.914 ms against a 10 ms lead. Live never came within 0.09 ms of eating it. On this
+evidence the lookahead has never once been needed - but this was not a heavy set, so it stays.

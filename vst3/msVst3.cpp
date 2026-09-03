@@ -731,6 +731,8 @@ public:
             atomic_store(&status->commitMarginMinMs,  snap.marginMinMs);
             atomic_store(&status->lateTicks,          (unsigned)snap.lateTicks);
             atomic_store(&status->blockPeriodRmsMs,   snap.blockPeriodRmsMs);
+            atomic_store(&status->residualRmsMs,       ms_clock_residual_ms(&clock));
+            atomic_store(&status->modelResyncs,        (unsigned)clock.modelResyncs);
             atomic_store(&status->driftPpm,           snap.driftPpm);
             atomic_store(&status->driftValid,         snap.driftValid ? 1 : 0);
             atomic_store(&status->driftSeconds,       snap.windowSeconds);
@@ -857,6 +859,37 @@ public:
                             (unsigned long long)snap.lateTicks, (unsigned long long)snap.ticks,
                             snap.blockPeriodRmsMs, snap.blockPeriodWorstMs, snap.driftPpm,
                             snap.hostBpm, snap.measuredBpm, snap.windowSeconds);
+
+                // THE PAIR, AND THE RESYNC COUNT, ON ONE LINE. A residual on its own says nothing:
+                // it can look excellent purely because the model keeps re-anchoring, and it can look
+                // useless purely because one re-anchor landed in the sum. Shown against the raw
+                // block jitter it came from, with the resync count and the worst single block beside
+                // it, the four together cannot lie in either direction.
+                //
+                // Expect the residual to be roughly MS_MODEL_KP of the raw figure. Anything near the
+                // raw figure means the model is not absorbing - look at the resync count first.
+                ms_log_line("  model  | block jitter raw %.3f ms -> residual %.3f ms RMS"
+                            " (%.1f %% of raw) worst %.3f ms | %llu resync(s) over %llu blocks",
+                            snap.blockPeriodRmsMs,
+                            ms_clock_residual_ms(&clock),
+                            (snap.blockPeriodRmsMs > 0.0)
+                                ? ((ms_clock_residual_ms(&clock) / snap.blockPeriodRmsMs) * 100.0)
+                                : 0.0,
+                            ms_clock_residual_worst_ms(&clock),
+                            (unsigned long long)clock.modelResyncs,
+                            (unsigned long long)clock.modelBlocks);
+
+                // THE BLOCK SIZE, reported whenever the host is not handing over a constant one.
+                // Every per-block figure above assumes it is, and Live does not - so a varying size
+                // is the first thing to know before reading any of them.
+                if (snap.blockFramesMin != snap.blockFramesMax) {
+                    ms_log_line("  blocks | host block size VARIES: %u..%u frames, %llu change(s)"
+                                " over %llu blocks - per-block figures are judged against the"
+                                " previous block's duration accordingly",
+                                snap.blockFramesMin, snap.blockFramesMax,
+                                (unsigned long long)snap.blockSizeChanges,
+                                (unsigned long long)snap.blocks);
+                }
             }
         }
 

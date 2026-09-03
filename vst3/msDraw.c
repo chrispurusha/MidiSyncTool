@@ -439,7 +439,7 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
     stat(28.0, y, "Commit margin", buffer);
     y          += 16.0;
 
-    unsigned late   = (unsigned)atomic_load(&status->lateTicks);
+    unsigned late    = (unsigned)atomic_load(&status->lateTicks);
 
     snprintf(buffer, sizeof(buffer), "%u", late);
     set_rgb_colour((tRgb)MS_CAPTION_GREY);
@@ -449,16 +449,31 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
     render_text(mainArea, (tRectangle){{28.0 + STAT_VALUE_DX, y}, {0.0, 11.0}}, buffer);
     y          += 16.0;
 
+    // THE PAIR, always together. The raw figure is the host's; the residual is what survives the
+    // timebase model and is therefore what the output clock actually inherits. Showing only the
+    // first would look like a fault the plug-in was not fixing; showing only the second would hide
+    // how much work is being done.
     snprintf(buffer, sizeof(buffer), "%.3f ms RMS", atomic_load(&status->blockPeriodRmsMs));
     stat(28.0, y, "Host block jitter", buffer);
+    y          += 16.0;
+
+    unsigned resyncs = (unsigned)atomic_load(&status->modelResyncs);
+
+    if (resyncs > 0) {
+        snprintf(buffer, sizeof(buffer), "%.3f ms RMS  (%u resync%s)",
+                 atomic_load(&status->residualRmsMs), resyncs, (resyncs == 1) ? "" : "s");
+    } else {
+        snprintf(buffer, sizeof(buffer), "%.3f ms RMS", atomic_load(&status->residualRmsMs));
+    }
+    stat(28.0, y, "  after filtering", buffer);
     y          += 26.0;
 
     // ---- what came back ----
     heading(20.0, y, "MEASURED DEVICE");
     y          += 20.0;
 
-    unsigned hits   = (unsigned)atomic_load(&status->hits);
-    double   jitter = atomic_load(&status->roundTripJitterMs);
+    unsigned hits    = (unsigned)atomic_load(&status->hits);
+    double   jitter  = atomic_load(&status->roundTripJitterMs);
 
     if (hits == 0) {
         stat(28.0, y, "Round trip", "waiting for audio");

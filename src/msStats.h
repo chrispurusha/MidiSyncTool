@@ -44,11 +44,19 @@ extern "C" {
 #define MS_STATS_HISTORY          (256) // recent commit margins, for the UI's scrolling graph
 
 typedef struct {
-    double   marginMeanMs;
-    double   marginMinMs;       // the worst case, and the one that matters
-    double   marginRmsMs;
-    double   blockPeriodRmsMs;
-    double   blockPeriodWorstMs;
+    double marginMeanMs;
+    double marginMinMs;         // the worst case, and the one that matters
+    double marginRmsMs;
+    double blockPeriodRmsMs;
+    double blockPeriodWorstMs;
+
+    // WHETHER THE HOST HANDS OVER A CONSTANT BLOCK AT ALL. It is assumed everywhere else here, and
+    // Live does not: a size change makes every per-block figure suspect until it is accounted for,
+    // so the range and the number of changes are reported rather than left to be inferred.
+    uint32_t blockFramesMin;
+    uint32_t blockFramesMax;
+    uint64_t blockSizeChanges;
+    uint64_t blocks;            // callbacks counted, as against ticks - the two are not the same
     double   driftPpm;
     double   hostBpm;
     double   measuredBpm;       // from the tick count against the wall clock, over the whole run

@@ -37,6 +37,11 @@ struct tMsStats {
     uint64_t         blockCount;
 
     uint64_t         prevBlockTime;
+    double           prevNominalMs;  // block n-1's duration - what the gap to block n must be judged against
+    uint32_t         prevFrames;
+    uint32_t         framesMin;      // the block sizes actually seen, because a host may vary them
+    uint32_t         framesMax;
+    uint64_t         sizeChanges;
     bool             havePrevBlock;
 
     uint64_t         firstPlayTime; // wall clock at the first playing block since the last reset
@@ -53,6 +58,10 @@ struct tMsStats {
     _Atomic double   pubMarginRms;
     _Atomic double   pubPeriodRms;
     _Atomic double   pubPeriodWorst;
+    _Atomic uint32_t pubFramesMin;
+    _Atomic uint32_t pubFramesMax;
+    _Atomic uint64_t pubSizeChanges;
+    _Atomic uint64_t pubBlocks;
     _Atomic double   pubDriftPpm;
     _Atomic int      pubDriftValid;
     _Atomic double   pubHostBpm;
@@ -102,6 +111,10 @@ void ms_stats_reset(tMsStats * stats) {
     atomic_store(&stats->pubMarginRms, 0.0);
     atomic_store(&stats->pubPeriodRms, 0.0);
     atomic_store(&stats->pubPeriodWorst, 0.0);
+    atomic_store(&stats->pubFramesMin, 0u);
+    atomic_store(&stats->pubFramesMax, 0u);
+    atomic_store(&stats->pubSizeChanges, (uint64_t)0);
+    atomic_store(&stats->pubBlocks, (uint64_t)0);
     atomic_store(&stats->pubDriftPpm, 0.0);
     atomic_store(&stats->pubDriftValid, 0);
     atomic_store(&stats->pubHostBpm, 0.0);
@@ -148,8 +161,16 @@ void ms_stats_block(tMsStats * stats,
     }
     double nominalMs = ((double)blockFrames / sampleRate) * 1000.0;
 
+    // AGAINST THE PREVIOUS BLOCK'S DURATION, NOT THIS ONE'S. The wall time between callback n-1 and
+    // callback n is the time the device took to consume block n-1's samples, so block n-1 is what it
+    // has to be judged against.
+    //
+    // With a fixed block size the two are identical and the error is invisible - which is exactly
+    // why it survived every offline run. A host that VARIES the block size, as Live does, then has
+    // every size change reported as a timing error: a 256-frame change at 48 kHz is 5.33 ms, and it
+    // turned up as a 5.209 ms worst case in Live with the clock itself perfectly steady.
     if (stats->havePrevBlock && (blockHostTime > stats->prevBlockTime)) {
-        double errMs = host_to_ms(blockHostTime - stats->prevBlockTime) - nominalMs;
+        double errMs = host_to_ms(blockHostTime - stats->prevBlockTime) - stats->prevNominalMs;
 
         stats->sumPeriodErrSq += (errMs * errMs);
         stats->blockCount++;
@@ -158,6 +179,23 @@ void ms_stats_block(tMsStats * stats,
             stats->worstPeriodErr = errMs;
         }
     }
+
+    // THE BLOCK SIZE ITSELF, because when the two figures above disagree with the wire the first
+    // question is whether the host is handing over a constant block at all, and nothing else here
+    // answers it.
+    if (stats->havePrevBlock && (blockFrames != stats->prevFrames)) {
+        stats->sizeChanges++;
+    }
+
+    if ((stats->framesMin == 0) || (blockFrames < stats->framesMin)) {
+        stats->framesMin = blockFrames;
+    }
+
+    if (blockFrames > stats->framesMax) {
+        stats->framesMax = blockFrames;
+    }
+    stats->prevFrames    = blockFrames;
+    stats->prevNominalMs = nominalMs;
     stats->prevBlockTime = blockHostTime;
     stats->havePrevBlock = true;
 
@@ -226,6 +264,10 @@ void ms_stats_block(tMsStats * stats,
     atomic_store(&stats->pubPeriodRms,
                  (stats->blockCount > 0) ? sqrt(stats->sumPeriodErrSq / (double)stats->blockCount) : 0.0);
     atomic_store(&stats->pubPeriodWorst, stats->worstPeriodErr);
+    atomic_store(&stats->pubFramesMin, stats->framesMin);
+    atomic_store(&stats->pubFramesMax, stats->framesMax);
+    atomic_store(&stats->pubSizeChanges, stats->sizeChanges);
+    atomic_store(&stats->pubBlocks, stats->blockCount);
     atomic_store(&stats->pubDriftPpm, driftPpm);
     atomic_store(&stats->pubDriftValid, (windowSeconds >= MS_STATS_DRIFT_SECONDS) ? 1 : 0);
     atomic_store(&stats->pubHostBpm, tempo);
@@ -248,6 +290,10 @@ void ms_stats_read(const tMsStats * stats, tMsStatsSnapshot * out) {
     out->marginRmsMs        = atomic_load(&stats->pubMarginRms);
     out->blockPeriodRmsMs   = atomic_load(&stats->pubPeriodRms);
     out->blockPeriodWorstMs = atomic_load(&stats->pubPeriodWorst);
+    out->blockFramesMin     = atomic_load(&stats->pubFramesMin);
+    out->blockFramesMax     = atomic_load(&stats->pubFramesMax);
+    out->blockSizeChanges   = atomic_load(&stats->pubSizeChanges);
+    out->blocks             = atomic_load(&stats->pubBlocks);
     out->driftPpm           = atomic_load(&stats->pubDriftPpm);
     out->driftValid         = (atomic_load(&stats->pubDriftValid) != 0);
     out->hostBpm            = atomic_load(&stats->pubHostBpm);

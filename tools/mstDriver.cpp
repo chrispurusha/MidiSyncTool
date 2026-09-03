@@ -73,6 +73,13 @@ using namespace Steinberg::Vst;
 static UInt64 gArrival[MAX_TICKS];
 static int    gTicks = 0;
 
+// THE TEMPO IN FORCE AS EACH TICK LANDED, which a ramp makes necessary. With a fixed tempo the
+// target interval is one number and the report can use it for every tick; under a ramp the target
+// moves, and measuring a moving grid against a fixed target would report the RAMP as jitter - tens
+// of milliseconds of it - and drown the thing being looked for.
+static _Atomic double gRampBpm;
+static double         gBpmAt[MAX_TICKS];
+
 // ── A DRUM MACHINE WITH A KNOWN LATENCY ──────────────────────────────────────────────────────────
 //
 // --echo-ms D makes the harness impersonate a device: it hears the probe's note-on and writes a
@@ -114,6 +121,7 @@ static void clock_listener(const MIDIPacketList * list, void * a, void * b) {
             }
 
             if ((b == 0xF8) && (gTicks < MAX_TICKS)) {
+                gBpmAt[gTicks]     = atomic_load(&gRampBpm);
                 gArrival[gTicks++] = AudioGetCurrentHostTime();
             } else if ((b == 0xFA) || (b == 0xFB) || (b == 0xFC) || (b == 0xF2)) {
                 // The transport bytes, printed as they arrive so the ORDER can be checked - an SPP
@@ -137,6 +145,8 @@ struct tDriverState {
     ProcessData *     data;
     ProcessContext *  ctx;
     double            bpm;
+    double            baseBpm;    // --ramp: where the ramp starts, so bpm can be recomputed per block
+    double            rampToBpm;  // and where it ends; 0 = no ramp
     double            rate;
     double            qnSamples;
     double            loopEndQn;
@@ -166,6 +176,18 @@ struct tDriverState {
 };
 
 static void driver_step(tDriverState * st) {
+    // A TEMPO RAMP, linear in wall time, which is what Live's tempo automation delivers and what the
+    // model's tempo handling had never been exercised against. A STEP change is the easy case: it
+    // happens once and the model has seconds to recover. A ramp reports a change on EVERY BLOCK,
+    // which is the case that found the rate term being reset before it could ever converge.
+    if (st->rampToBpm > 0.0) {
+        double through = (st->totalBlocks > 1)
+                         ? ((double)st->blocksDone / (double)(st->totalBlocks - 1)) : 0.0;
+
+        st->bpm       = st->baseBpm + ((st->rampToBpm - st->baseBpm) * through);
+        st->qnSamples = (st->rate * 60.0) / st->bpm;
+        atomic_store(&gRampBpm, st->bpm);
+    }
     double blockQn = (double)st->block / st->qnSamples;
 
     // Live's report: normally the true position, but for exactly one block after a wrap it is the
@@ -559,6 +581,11 @@ int main(int argc, const char ** argv) {
                "                  [--rate N] [--block N] [--realtime]\n"
                "\n"
                "  --bpm N       tempo (default 130, matching the measured capture)\n"
+               "  --ramp N      ramp the tempo linearly from --bpm to N across the run, reporting a\n"
+               "                change on every block the way Live's tempo automation does\n"
+               "  --vary        hand over a DIFFERENT block size each call, between a quarter of\n"
+               "                --block and all of it, the way Live splits its buffer. Offline only:\n"
+               "                a real device's block size is the device's to choose\n"
                "  --bars N      loop length in bars of 4/4; 0 disables looping (default 1)\n"
                "  --seconds N   how much musical time to run (default 10)\n"
                "  --rate N      sample rate (default 48000)\n"
@@ -577,6 +604,8 @@ int main(int argc, const char ** argv) {
         return 1;
     }
     double bpm      = 130.0;
+    double rampToBpm = 0.0;
+    bool   varyBlocks = false;
     double startFrom = 0.0;
     double bars     = 1.0;
     double seconds  = 10.0;
@@ -594,6 +623,9 @@ int main(int argc, const char ** argv) {
     for (int i = 2; i < argc; i++) {
         if ((strcmp(argv[i], "--bpm") == 0) && ((i + 1) < argc)) {
             bpm = atof(argv[++i]);
+        } else if ((strcmp(argv[i], "--ramp") == 0) && ((i + 1) < argc)) {
+            rampToBpm = atof(argv[++i]);
+            realtime  = true;   // a ramp is only meaningful against the wall clock
         } else if ((strcmp(argv[i], "--bars") == 0) && ((i + 1) < argc)) {
             bars = atof(argv[++i]);
         } else if ((strcmp(argv[i], "--seconds") == 0) && ((i + 1) < argc)) {
@@ -620,6 +652,9 @@ int main(int argc, const char ** argv) {
         } else if ((strcmp(argv[i], "--param") == 0) && ((i + 2) < argc)) {
             paramId    = atoi(argv[++i]);
             paramValue = atof(argv[++i]);
+        } else if (strcmp(argv[i], "--vary") == 0) {
+            varyBlocks = true;
+            realtime   = true;
         } else if (strcmp(argv[i], "--stopped") == 0) {
             neverPlay = true;
             realtime  = true;
@@ -795,6 +830,8 @@ int main(int argc, const char ** argv) {
     st.data        = &data;
     st.ctx         = &ctx;
     st.bpm         = bpm;
+    st.baseBpm     = bpm;
+    st.rampToBpm   = rampToBpm;
     st.rate        = rate;
     st.qnSamples   = qnSamples;
     st.loopEndQn   = loopEndQn;
@@ -837,6 +874,15 @@ int main(int argc, const char ** argv) {
         }
     }
 
+    atomic_store(&gRampBpm, bpm);
+
+    if (rampToBpm > 0.0) {
+        printf("tempo ramp: %.3f -> %.3f BPM across the run\n", bpm, rampToBpm);
+    }
+
+    if (varyBlocks) {
+        printf("block size: VARYING, %d..%d frames per call\n", (block > 4) ? (block / 4) : 1, block);
+    }
     printf("driving %s\n  %.3f BPM, %.0f Hz, %d-frame blocks, loop %s\n",
            argv[1], bpm, rate, block,
            (loopEndQn > 0.0) ? "on" : "off");
@@ -888,8 +934,25 @@ int main(int argc, const char ** argv) {
                atomic_load(&capture.overflows), atomic_load(&capture.underflows));
         ring_free(&capture);
     } else {
-        for (int64 b = 0; b < totalBlocks; b++) {
+        int64 samplesEmitted = 0;
+        int64 totalSamples   = (int64)(seconds * rate);
+        unsigned varySeed    = 12345u;
+
+        for (int64 b = 0; (varyBlocks ? (samplesEmitted < totalSamples) : (b < totalBlocks)); b++) {
+            // A VARYING BLOCK SIZE, which is the one Live behaviour this harness never reproduced -
+            // and the one that hid an off-by-one in every per-block figure for a day. Between a
+            // quarter of --block and all of it, which is the shape Live's splitting produces.
+            if (varyBlocks) {
+                varySeed = (varySeed * 1103515245u) + 12345u;
+
+                int32 quarter = (st.block > 4) ? (block / 4) : 1;
+                int32 size    = quarter + (int32)((varySeed >> 16) % (unsigned)(block - quarter + 1));
+
+                st.block            = size;
+                st.data->numSamples = size;
+            }
             driver_step(&st);
+            samplesEmitted += st.data->numSamples;
 
             if (realtime) {
                 // AN ABSOLUTE DEADLINE, not a sleep of one block's length. usleep() always
@@ -902,8 +965,10 @@ int main(int argc, const char ** argv) {
                 // badly any individual sleep behaves.
                 realtimeStart = (realtimeStart == 0) ? AudioGetCurrentHostTime() : realtimeStart;
 
+                double dueSamples = varyBlocks ? (double)samplesEmitted
+                                               : ((double)(b + 1) * (double)block);
                 UInt64 due = realtimeStart
-                             + AudioConvertNanosToHostTime((UInt64)(((double)(b + 1) * (double)block / rate) * 1.0e9));
+                             + AudioConvertNanosToHostTime((UInt64)((dueSamples / rate) * 1.0e9));
                 UInt64 now = AudioGetCurrentHostTime();
 
                 if (due > now) {
@@ -925,9 +990,13 @@ int main(int argc, const char ** argv) {
         double target = 60000.0 / (bpm * 24.0);
         double sum = 0.0, sumsq = 0.0, worst = 0.0;
 
+        // UNDER A RAMP THE TARGET MOVES WITH THE TICK. gBpmAt is the tempo in force as that tick
+        // landed, so each interval is judged against the grid that was actually being generated.
+        #define TICK_TARGET(i)    ((rampToBpm > 0.0) ? (60000.0 / (gBpmAt[i] * 24.0)) : target)
+
         for (int i = 1; i < gTicks; i++) {
             double ms  = (double)AudioConvertHostTimeToNanos(gArrival[i] - gArrival[i - 1]) / 1.0e6;
-            double err = ms - target;
+            double err = ms - TICK_TARGET(i);
 
             sum += err;
             sumsq += err * err;
@@ -947,7 +1016,7 @@ int main(int argc, const char ** argv) {
 
         for (int i = 1; i < gTicks; i++) {
             double ms  = (double)AudioConvertHostTimeToNanos(gArrival[i] - gArrival[i - 1]) / 1.0e6;
-            double err = ms - target;
+            double err = ms - TICK_TARGET(i);
 
             if (fabs(err) > 2.0) {
                 printf("    tick %-4d  interval %7.3f ms  err %+7.3f ms%s\n", i, ms, err,
@@ -959,7 +1028,12 @@ int main(int argc, const char ** argv) {
                 lastBad = i;
             }
         }
-        printf("clock delivered: %d ticks, target %.4f ms\n", gTicks, target);
+        if (rampToBpm > 0.0) {
+            printf("clock delivered: %d ticks, target %.4f -> %.4f ms (ramped)\n",
+                   gTicks, 60000.0 / (bpm * 24.0), 60000.0 / (rampToBpm * 24.0));
+        } else {
+            printf("clock delivered: %d ticks, target %.4f ms\n", gTicks, target);
+        }
         printf("  interval error: mean %+.4f ms, RMS %.4f ms, worst %+.4f ms\n",
                sum / n, sqrt(sumsq / n), worst);
     } else if ((listenTo != NULL) && !realtime) {

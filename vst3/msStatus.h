@@ -54,6 +54,12 @@ typedef struct {
     _Atomic double commitMarginMinMs;
     atomic_uint    lateTicks;
     _Atomic double blockPeriodRmsMs;
+
+    // What is LEFT of that once the timebase model has absorbed what it can - the part the output
+    // clock actually inherits. Shown beside the raw figure, because either number on its own says
+    // nothing about whether the absorbing works.
+    _Atomic double residualRmsMs;
+    atomic_uint    modelResyncs;
     _Atomic double driftPpm;
     atomic_int     driftValid;      // false while the window is still filling
     _Atomic double driftSeconds;    // how much of that window there is so far

@@ -31,6 +31,17 @@ Confirmed -> delete the line. Check failed -> move it to todo.txt.
   compensation stepper. Verified offline through --param only; the click path itself has not run in
   a host. Check too that a saved set reopens on the right port, and that it says "waiting for" when
   that port is switched off.
+- The "blocks |" line's change count was printing TICKS, not blocks. Fixed after the run that found
+  Live's 8..256 range; the range and the change count were right, the denominator was not. Re-read it.
+- Whether Live's 8-frame minimum block ever coincides with a tick. Nothing has gone wrong, but a
+  block that short is 0.167 ms and the tick placement arithmetic inside it has never been examined.
+- Whether the resync threshold of 30 ms is right in Live: a tempo change or a loop should re-anchor
+  cleanly, and the resync count on the panel says whether it is doing so more often than it should.
+- TEMPO AUTOMATION IN LIVE. The rate term used to be dead under a ramp and now runs; mstDriver --ramp
+  covers it offline but Live's own ramp reporting has never been seen. Watch the resync count and the
+  drift figure across an automated tempo move.
+- The new "model |" log line - raw, residual, per cent, worst block, resyncs, blocks - in a real host.
+  It is the line that answers the residual question without needing the panel open.
 - Drift in LIVE. Offline against the QU-24 it settles at -19 ppm within a couple of ppm; Live's own
   block timing is its own, and the figure should be checked to be as steady there.
 - THE PANEL IN LIVE. It builds, the controller connects, the slot crosses and createView returns a

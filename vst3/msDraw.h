@@ -25,7 +25,7 @@ extern "C" {
 // the graph off the bottom of the window - and the graph is now anchored to the canvas bottom rather
 // than to the running y, so a row added above it can crowd the layout but can never push it off
 // again. A collision is visible; a control drawn past the edge is not.
-#define MS_CANVAS_H    (740.0)
+#define MS_CANVAS_H    (770.0)
 
 // A click landed on a control the HOST must be told about, because these are VST3 parameters and
 // changing one behind the host's back would leave its automation and its saved state wrong.

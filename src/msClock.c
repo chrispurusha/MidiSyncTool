@@ -33,9 +33,21 @@ void ms_clock_set_compensation_ms(tMsClock * clock, double deviceMs) {
     }
 }
 
+double ms_clock_residual_ms(const tMsClock * clock) {
+    if ((clock == NULL) || (clock->modelBlocks == 0)) {
+        return 0.0;
+    }
+    return sqrt(clock->modelErrorSumSq / (double)clock->modelBlocks);
+}
+
+double ms_clock_residual_worst_ms(const tMsClock * clock) {
+    return (clock != NULL) ? clock->modelWorstMs : 0.0;
+}
+
 void ms_clock_init(tMsClock * clock) {
     memset(clock, 0, sizeof(*clock));
     clock->destination = -1;
+    clock->rateRatio   = 1.0;   // NOT zero, which memset would leave it - see msClock.h
 }
 
 // WHERE THE HOST SAYS WE ARE IS NOT ALWAYS WHERE WE ARE, and that is the whole difficulty.
@@ -85,6 +97,11 @@ void ms_clock_process(tMsClock * clock,
         // forgotten - a restart must not think it is continuing.
         clock->havePrev = false;
         clock->running  = false;
+        // THE MODELLED BASE IS DROPPED, not merely left behind. The residual below is the step from
+        // one block's base to the next, and the model does not run while stopped - so keeping it
+        // would make the first block of the next run measure the whole stopped GAP as a single
+        // residual sample. Seconds of it, squared, into a sum that never forgets.
+        clock->haveBase = false;
         return;
     }
     // START OR CONTINUE, on the edge into playing. The distinction is not cosmetic: Start means "from
@@ -167,6 +184,146 @@ void ms_clock_process(tMsClock * clock,
     }
     (void)cycleStartPpq;
 
+    // ---- the timebase model -------------------------------------------------------------------
+    //
+    // See the long note in msClock.h. The observation is this block's wall time; the prediction is
+    // where the model says musical position runQn falls; the ticks below are stamped from the model.
+    double observedNs     = (double)AudioConvertHostTimeToNanos(blockHostTime);
+    double nominalNsPerQn = (60.0 / tempo) * 1.0e9;
+
+    if (restarted || !clock->haveModel) {
+        clock->runQn           = 0.0;
+        clock->anchorQn        = 0.0;
+        clock->anchorNs        = observedNs;
+        // THE CRYSTAL RATIO SURVIVES A RESTART. It describes this machine's two oscillators, not
+        // this run - re-deriving it from nominal would spend the first seconds of every run
+        // relearning something that has not changed since the last one.
+        clock->nsPerQn         = nominalNsPerQn * clock->rateRatio;
+        clock->haveModel       = true;
+        clock->haveBase        = false;
+        clock->modelErrorSumSq = 0.0;
+        clock->modelWorstMs    = 0.0;
+        clock->modelBlocks     = 0;
+    }
+
+    // A TEMPO CHANGE RE-SLOPES THE LINE, it does not perturb it. Leaving the old slope in place and
+    // letting the PI correction discover the new one puts a large error into the filter for as long
+    // as it takes to converge - and forces Kp to stay high enough to converge quickly, which is
+    // exactly what costs jitter. Handling tempo explicitly is what lets Kp be small.
+    //
+    // The line is re-sloped through the CURRENT predicted point rather than through the observation,
+    // so phase is continuous across the change and only the gradient after it differs.
+    //
+    // ANCHORQN IS DELIBERATELY LEFT WHERE IT IS, which is not how this first read. Moving it to runQn
+    // is the obvious way to re-slope, and it silently disables the rate term: that term estimates the
+    // slope error as errorNs/span with span measured from the anchor, and it is gated on span > 1.0
+    // quarter note. Re-anchoring set span back to one block - about 0.012 QN - so a tempo change
+    // stalled rate learning for half a second, and under tempo AUTOMATION, which reports a change on
+    // every single block, span never reached 1.0 again and the rate term never ran at all. The model
+    // silently degraded to phase-only at Kp 0.01, which is a deliberately weak tracker that is only
+    // safe BECAUSE tempo and rate are handled explicitly.
+    //
+    // Holding anchorQn and solving for anchorNs keeps phase continuous and keeps the span. The
+    // accumulated error from the old slope is absorbed into anchorNs, so the span now overstates the
+    // baseline the remaining error was collected over and errorNs/span under-estimates the slope
+    // error. That is the safe direction: it learns more slowly, never faster than the truth.
+    if (  clock->haveModel && (clock->lastTempo > 0.0)
+       && (fabs(tempo - clock->lastTempo) > 1.0e-9)) {
+        double predictedNow = clock->anchorNs + ((clock->runQn - clock->anchorQn) * clock->nsPerQn);
+
+        clock->nsPerQn  = nominalNsPerQn * clock->rateRatio;
+        clock->anchorNs = predictedNow - ((clock->runQn - clock->anchorQn) * clock->nsPerQn);
+    }
+    double predictedNs = clock->anchorNs + ((clock->runQn - clock->anchorQn) * clock->nsPerQn);
+    double errorNs     = observedNs - predictedNs;
+
+    // A SEEK, A TEMPO CHANGE TAKING EFFECT, OR A DROPOUT - not jitter. Filtering through one of
+    // those would drag the output across seconds of wrong time while it caught up, so the model is
+    // re-anchored outright and the event is counted rather than smoothed away.
+    if (fabs(errorNs) > (MS_MODEL_RESYNC_MS * 1.0e6)) {
+        clock->anchorQn = clock->runQn;
+        clock->anchorNs = observedNs;
+        // THE RATIO SURVIVES A RESYNC TOO. A dropout says the wall clock jumped; it says nothing
+        // whatever about how the two crystals compare, and discarding the ratio would make every
+        // glitch cost seconds of relearning.
+        clock->nsPerQn  = nominalNsPerQn * clock->rateRatio;
+        clock->modelResyncs++;
+        predictedNs     = observedNs;
+        errorNs         = 0.0;
+        // AND THE BASE IS DROPPED. The base has just moved discontinuously by up to
+        // MS_MODEL_RESYNC_MS, and the residual below measures base-to-base steps - so letting this
+        // block through would write the whole re-anchor jump into the figure that is supposed to
+        // report how SMOOTHLY the base advances. One resync in a thousand blocks is 0.95 ms of pure
+        // artefact, four times Live's raw block jitter, and it is what made the filter look useless
+        // in Live while the wire was in fact clean.
+        clock->haveBase = false;
+    } else {
+        // A PI CORRECTION. The proportional term moves the line; the integral term tilts it, which
+        // is what absorbs the standing difference between the audio crystal and the system clock
+        // rather than chasing it block after block.
+        double span = clock->runQn - clock->anchorQn;
+
+        clock->anchorNs += (MS_MODEL_KP * errorNs);
+
+        if (span > 1.0) {
+            clock->nsPerQn  += (MS_MODEL_KI * errorNs / span);
+
+            // CARRIED BACK INTO THE RATIO, which is the form that survives a tempo change. Clamped
+            // because a runaway here would be silent and would wreck the output slowly: no pair of
+            // crystals in a computer is 1000 ppm apart, so anything past that is a fault, not a
+            // measurement.
+            clock->rateRatio = clock->nsPerQn / nominalNsPerQn;
+
+            if (clock->rateRatio < 0.999) {
+                clock->rateRatio = 0.999;
+                clock->nsPerQn   = nominalNsPerQn * clock->rateRatio;
+            } else if (clock->rateRatio > 1.001) {
+                clock->rateRatio = 1.001;
+                clock->nsPerQn   = nominalNsPerQn * clock->rateRatio;
+            }
+        }
+        predictedNs     += (MS_MODEL_KP * errorNs);
+    }
+
+    // WHAT THE OUTPUT ACTUALLY INHERITS, which is not the prediction error.
+    //
+    // The first version of this accumulated errorNs - the model's distance from the observation -
+    // and called it "after filtering". It is not: that is essentially the host's own jitter measured
+    // a second way, which is why Live reported 150 microseconds of it against 232 of block jitter
+    // and the filter looked far weaker than it is. The ticks are stamped from the BASE, so the
+    // honest measure is how smoothly the base advances - the same period-error test, applied to the
+    // modelled time instead of the observed time.
+    //
+    // AND IT IS JUDGED AGAINST THE PREVIOUS BLOCK'S DURATION, not this one's. runQn has not yet had
+    // this block's blockPpq added when predictedNs is computed above, so the step from the last base
+    // to this one spans block n-1 - and subtracting block n's nominal duration instead reports the
+    // DIFFERENCE BETWEEN TWO BLOCK SIZES as though it were a timing error.
+    //
+    // Invisible with a fixed block size, which is every offline run here. In Live, which varies it,
+    // it read as a residual of 122 % of the raw block jitter with a 5.267 ms worst case - 256 frames
+    // at 48 kHz is 5.33 ms - while the wire itself was perfectly steady. msStats had the identical
+    // fault in its raw figure, so BOTH numbers were inflated and the pair still looked plausible.
+    if (clock->haveBase) {
+        double baseStepNs = predictedNs - clock->lastBaseNs;
+        double nominalNs  = clock->lastNominalNs;
+        double residualMs = (baseStepNs - nominalNs) / 1.0e6;
+
+        clock->modelErrorSumSq += (residualMs * residualMs);
+        clock->modelBlocks++;
+
+        if (fabs(residualMs) > clock->modelWorstMs) {
+            clock->modelWorstMs = fabs(residualMs);
+        }
+    }
+    clock->lastBaseNs    = predictedNs;
+    clock->lastNominalNs = ((double)blockFrames / sampleRate) * 1.0e9;
+    clock->haveBase      = true;
+
+    // THE BASE EVERY TICK IN THIS BLOCK IS STAMPED FROM. Modelled, not observed - which is the whole
+    // point: a block that arrived 0.5 ms late moves this by MS_MODEL_KP of that error, not by all
+    // of it.
+    uint64_t baseHostTime = AudioConvertNanosToHostTime((uint64_t)predictedNs);
+
     if (clock->havePrev) {
         double expected = clock->lastPpq + blockPpq;
 
@@ -201,7 +358,7 @@ void ms_clock_process(tMsClock * clock,
         // microseconds rather than milliseconds.
         double   offsetNs = ((distance / blockPpq) * ((double)blockFrames / sampleRate) * 1.0e9)
                             + (MS_LOOKAHEAD_MS * 1.0e6);
-        uint64_t when     = blockHostTime + AudioConvertNanosToHostTime((uint64_t)offsetNs);
+        uint64_t when     = baseHostTime + AudioConvertNanosToHostTime((uint64_t)offsetNs);
         uint8_t  byte     = MIDI_CLOCK;
 
         ms_midi_send_at(clock->destination, &byte, 1, when);
@@ -217,6 +374,7 @@ void ms_clock_process(tMsClock * clock,
         clock->ticksSent++;
         distance += tickPpq;
     }
+    clock->runQn    += blockPpq;
     clock->phase     = fmod(clock->phase + blockPpq, tickPpq);
 
     clock->lastPpq   = ppq;
