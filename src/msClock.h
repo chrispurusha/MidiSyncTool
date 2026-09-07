@@ -192,8 +192,19 @@ void ms_clock_reset_stats(tMsClock * clock);
 // Each tick then carries a musical moment L + D later than the one whose wall time it was sent at,
 // its sound arrives on that moment, and no event is ever asked to exist before its own block.
 //
+// THE ADVANCE IS THE WHOLE OF L + D, NOT ITS REMAINDER MODULO A TICK. This is the second half of the
+// lesson and it cost a release: the phase was wrapped into one tick period on the argument that a
+// periodic stream shifted by a whole tick is the same stream. It is not, because the RECEIVER COUNTS
+// TICKS from the Start it was given - tick n is musical position n/24 of this run, and one tick
+// withheld is a device one tick behind, not a device on an equivalent grid. Wrapped, the advance
+// actually delivered was ((L + D) mod P) - P, which is negative for every setting and not even
+// monotonic in the dial. Compensation appeared to do nothing.
+//
 // The one casualty is the first L + D of a run: the tick grid cannot be advanced before the
-// transport has started, so the opening beat is uncompensated. Every beat after it is exact.
+// transport has started, so the opening beat is uncompensated. Concretely, the ticks covering that
+// first L + D of music have to go out together the moment the transport starts - a burst of one or
+// two, stamped at the present because no earlier time exists to stamp them with. They are excluded
+// from the jitter statistics for that reason. Every beat after them is exact.
 //
 // Pass the DEVICE's round trip; the schedule lead is added here.
 void ms_clock_set_compensation_ms(tMsClock * clock, double deviceMs);

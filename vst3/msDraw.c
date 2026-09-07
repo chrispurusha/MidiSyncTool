@@ -102,10 +102,20 @@ static void ms_menu_action(int index) {
 #define MS_ROWS        (5)
 
 // A VALUE BOX IS ONLY AS WIDE AS ITS CONTENT NEEDS. A port name or the mode sentence wants the full
-// width; a compensation reading is at most "100.0 ms", and giving that a 330 px box put its two
-// arrows a third of the panel apart - with the right-hand one standing directly over the mode toggle
-// below and reading as though it belonged to that row rather than this one.
-#define ROW_STEP_W     (132.0)
+// width; a compensation reading is at most "100.0 ms", and giving that a 330 px box put its arrows
+// a third of the panel apart - with the right-hand one standing directly over the mode toggle below
+// and reading as though it belonged to that row rather than this one.
+//
+// IT IS FOUR ARROWS NOW, not two, so the width is the reading plus two pairs. See row_arrow().
+#define ROW_STEP_W     (186.0)
+
+// TWO STEP SIZES, because one cannot do both jobs. The coarse step has to reach a device's figure
+// from nothing without a hundred clicks; the fine step has to TRIM one, and "Use measured" lands on
+// whatever the measurement actually was - 11.8 ms - which a whole-millisecond step can only carry
+// up and down the range keeping the .8 forever. The tenth is also the panel's own resolution: the
+// reading is printed to one decimal, so a step finer than this could not be seen.
+#define MS_STEP_COARSE (1.0)
+#define MS_STEP_FINE   (0.1)
 
 static const double gRowWidth[MS_ROWS] = {ROW_VALUE_W, ROW_VALUE_W, ROW_STEP_W, ROW_VALUE_W,
                                           ROW_VALUE_W};
@@ -147,19 +157,20 @@ static tRectangle row_value(int row) {
     };
 }
 
-static tRectangle row_prev(int row) {
-    return (tRectangle){{
-                            ROW_VALUE_X, gControlTop + ((double)row * ROW_GAP)
-                        }, {
-                            ROW_ARROW_W, ROW_H
-                        }
-    };
-}
+// THE FOUR ARROWS OF A STEPPED ROW, outermost coarse and innermost fine, laid out
+//
+//      [<<] [<]   value   [>] [>>]
+//
+// so that distance from the reading reads as size of change. Slot 0 is the leftmost. The pairs are
+// anchored to their own end of the box rather than measured across it, so the row can be made wider
+// for a longer reading without either pair moving off the edge it belongs to.
+static tRectangle row_arrow(int row, int slot) {
+    double left = ROW_VALUE_X;
+    double x    = (slot < 2) ? (left + ((double)slot * ROW_ARROW_W))
+                             : (left + row_w(row) - ((double)(4 - slot) * ROW_ARROW_W));
 
-static tRectangle row_next(int row) {
     return (tRectangle){{
-                            ROW_VALUE_X + row_w(row) - ROW_ARROW_W,
-                            gControlTop + ((double)row * ROW_GAP)
+                            x, gControlTop + ((double)row * ROW_GAP)
                         }, {
                             ROW_ARROW_W, ROW_H
                         }
@@ -323,11 +334,13 @@ static void control_row(int row, const char * name, const char * value, bool ste
     render_rectangle(mainArea, box);
 
     if (stepped) {
-        tRgb arrow = live ? (tRgb){0.30, 0.30, 0.33} : (tRgb){0.20, 0.20, 0.23};
+        tRgb         arrow    = live ? (tRgb){0.30, 0.30, 0.33} : (tRgb){0.20, 0.20, 0.23};
+        const char * glyph[4] = {"<<", "<", ">", ">>"};
 
-        draw_button(mainArea, button_face(row_prev(row)), "<", arrow);
-        draw_button(mainArea, button_face(row_next(row)), ">", arrow);
-        textX = box.coord.x + ROW_ARROW_W + 10.0;
+        for (int slot = 0; slot < 4; slot++) {
+            draw_button(mainArea, button_face(row_arrow(row, slot)), glyph[slot], arrow);
+        }
+        textX = box.coord.x + (2.0 * ROW_ARROW_W) + 10.0;
     }
     set_rgb_colour(live ? (tRgb){0.92, 0.92, 0.94} : (tRgb)MS_HELD_FIGURE);
     render_text(mainArea, (tRectangle){{textX, box.coord.y + 5.0}, {0.0, TEXT_H}}, value);
@@ -592,9 +605,11 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
     }
     // The port is REMEMBERED in monitor mode but nothing goes to it, and the analyse channel is
     // remembered in clock-only but nothing is read from it. Both stay set and settable; both say so.
-    control_row(0, "Port", label, false, sending);
+    control_row(0, "MIDI out port", label, false, sending);
 
-    control_row(1, "Analyse", audio_source_label(gAudioSource), false, monitor || measuring);
+    // "Analyse", beside a row naming a MIDI port, read as though it might be analysing that port.
+    // It is an AUDIO input - the channel the detector listens to - and the caption now says so.
+    control_row(1, "Analyse audio", audio_source_label(gAudioSource), false, monitor || measuring);
 
     snprintf(buffer, sizeof(buffer), "%.1f ms", gCompensate * MS_COMPENSATE_MAX);
 
@@ -1088,8 +1103,16 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
 
 // Stepping a continuous parameter. Clamped rather than wrapped: an arrow that jumps from the top of
 // the range back to the bottom looks like a glitch.
+//
+// SNAPPED TO THE FINE GRID AFTERWARDS, which is what makes a coarse step usable on a measured
+// figure. "Use measured" dials in the measurement itself - 11.83 ms, not 11.8 - and stepping that
+// without snapping carries the stray hundredths through every later click, so the reading advances
+// 12.8, 13.8, 14.8 and no arrow can ever reach a whole millisecond. Rounding to the tenth the panel
+// prints means the first click lands on the grid and every one after it stays there.
 static double step_value(double normalized, double stepMs) {
     double ms = (normalized * MS_COMPENSATE_MAX) + stepMs;
+
+    ms = round(ms / MS_STEP_FINE) * MS_STEP_FINE;
 
     if (ms < 0.0) {
         ms = 0.0;
@@ -1165,18 +1188,19 @@ bool ms_draw_click(double x, double y, tMsEditRequest * request) {
         return true;
     }
 
-    // A MILLISECOND A CLICK, which is the resolution the measurement is good to. Finer would be
-    // false precision and coarser would not reach a device's figure.
-    if (hit(row_prev(2), x, y)) {
-        request->which      = eMsEditCompensate;
-        request->normalized = step_value(gCompensate, -1.0);
-        return true;
-    }
+    // A MILLISECOND ON THE OUTER PAIR AND A TENTH ON THE INNER. The millisecond is what it takes to
+    // reach a device's figure by hand; the tenth is what it takes to trim one, and trimming is the
+    // common case now that "Use measured" does the travelling. See MS_STEP_FINE.
+    {
+        const double step[4] = {-MS_STEP_COARSE, -MS_STEP_FINE, MS_STEP_FINE, MS_STEP_COARSE};
 
-    if (hit(row_next(2), x, y)) {
-        request->which      = eMsEditCompensate;
-        request->normalized = step_value(gCompensate, 1.0);
-        return true;
+        for (int slot = 0; slot < 4; slot++) {
+            if (hit(row_arrow(2, slot), x, y)) {
+                request->which      = eMsEditCompensate;
+                request->normalized = step_value(gCompensate, step[slot]);
+                return true;
+            }
+        }
     }
 
     // THE MODE. A drop-down now that there are three of them: cycling through on each click was

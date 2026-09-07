@@ -330,11 +330,11 @@ USING IT
 
 Put it on a track. The SETUP rows at the top of its panel are:
 
-  Port          the MIDI destination to send clock to. It starts at "none",
+  MIDI out port the MIDI destination to send clock to. It starts at "none",
                 deliberately: a plug-in that picks a port on your behalf ends up
                 driving hardware nobody asked it to.
 
-  Analyse       which side of that track's audio input to listen to for the
+  Analyse audio which side of that track's audio input to listen to for the
                 hardware's transients. Feed the device's audio back into the
                 track for the latency and jitter figures to mean anything.
                 It has no effect in Generate clock only, where nothing is
@@ -367,6 +367,14 @@ Put it on a track. The SETUP rows at the top of its panel are:
                 plug-in's own output looped back through a virtual port. It
                 measures only - nothing steers the generated clock from it -
                 and it runs in every mode, including Monitor.
+
+IF YOUR HOST IS ABLETON LIVE
+
+Leave "Keep Latency" ON for the track your hardware's audio comes back in on. It
+is Live's own per-track record-monitoring latency setting, and with it on Live's
+delay compensation sits INSIDE the path this plug-in measures. The round trip you
+read - and so the compensation you dial in from it - then accounts for the host
+as well as the device, and recorded takes land on the grid.
 
 Start the transport and the figures fill in. In Generate clock only there is
 nothing to measure, so MEASURED DEVICE reads as dashes, or holds the numbers

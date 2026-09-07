@@ -194,14 +194,26 @@ void ms_clock_process(tMsClock * clock,
 
         clock->advanceApplied = advanceQn;
 
-        // WRAPPED INTO ONE TICK, which loses nothing: a periodic stream shifted by a whole number of
-        // tick periods is the same stream. Keeping phase inside [0, tickPpq) is also what guarantees
-        // the in-block offset below can never come out negative.
-        clock->phase          = fmod(clock->phase + delta, tickPpq);
-
-        if (clock->phase < 0.0) {
-            clock->phase += tickPpq;
-        }
+        // NOT WRAPPED INTO ONE TICK, and the wrap that used to be here is worth describing because
+        // it looked obviously safe and silently destroyed the feature.
+        //
+        // The reasoning was "a periodic stream shifted by a whole number of tick periods is the same
+        // stream", so only the remainder need be applied. That is true of an anonymous pulse train
+        // and FALSE HERE, because the receiver COUNTS these pulses from the Start it was given. Tick
+        // n means musical position n/24 of this run. Dropping a whole tick period of advance does not
+        // shift the grid onto an equivalent one - it hands the device one fewer tick, so the device
+        // sits one tick behind where the compensation was asking it to be, and the advance actually
+        // delivered is ((D + L) mod P) - P: NEGATIVE at every setting, and non-monotonic in the dial.
+        // Simulated at 120 BPM, P = 20.833 ms: 11.8 ms asked gave 19.9 ms LATE, 21.9 ms asked gave
+        // 9.8 ms late. The panel appeared to do nothing useful, which is exactly how it was reported.
+        //
+        // So the whole advance goes into the phase, and the emission loop below realises the
+        // whole-tick part by sending the catch-up ticks. That is not a workaround, it is what the
+        // compensation MEANS: to have the device D + L ahead, it must have been given the ticks for
+        // the next D + L of music. The cost is the burst at the head of a run, which is the casualty
+        // the note in msClock.h already names - those ticks cannot be sent before the transport
+        // started, so they go out together as soon as it does and the opening beat stays late.
+        clock->phase          = clock->phase + delta;
     }
     (void)cycleStartPpq;
 
@@ -379,14 +391,34 @@ void ms_clock_process(tMsClock * clock,
         // microseconds rather than milliseconds.
         double   offsetNs = ((distance / blockPpq) * ((double)blockFrames / sampleRate) * 1.0e9)
                             + (MS_LOOKAHEAD_MS * 1.0e6);
-        uint64_t when     = baseHostTime + AudioConvertNanosToHostTime((uint64_t)offsetNs);
-        uint8_t  byte     = MIDI_CLOCK;
+        uint64_t when;
+
+        // A CATCH-UP TICK: one the compensation has asked for before the block that decided it could
+        // possibly send it. Only the head of a run produces these - see the phase note above - but
+        // the offset MUST be tested rather than assumed positive, because it is about to be cast to
+        // an unsigned type where a negative would become an enormous future timestamp and the tick
+        // would simply never be heard.
+        bool caughtUp = (offsetNs < 0.0);
+
+        if (caughtUp) {
+            when = AudioGetCurrentHostTime();       // as soon as the wire will take it
+        } else {
+            when = baseHostTime + AudioConvertNanosToHostTime((uint64_t)offsetNs);
+        }
+        uint8_t byte = MIDI_CLOCK;
 
         ms_midi_send_at(clock->destination, &byte, 1, when);
 
         // READ AFTER the send, not before: what is wanted is how much future was left once the tick
         // was actually in CoreMIDI's hands, and the send itself takes time.
-        ms_stats_tick(clock->stats, when, AudioGetCurrentHostTime());
+        //
+        // A CATCH-UP TICK IS NOT MEASURED. It was knowingly stamped at the present, so its commit
+        // margin is zero by construction and its interval is not a tick period - feeding it to the
+        // statistics would put a permanent outlier in the worst case at the start of every run and
+        // report a defect that is really the compensation doing its job.
+        if (!caughtUp) {
+            ms_stats_tick(clock->stats, when, AudioGetCurrentHostTime());
+        }
         // COUNTED WITHIN THE RUN, not since the plug-in loaded. The detector takes every Nth tick as
         // a calibration position, and that N has to be measured from the downbeat the transport
         // started on or the grid lands between the drum machine's steps.
