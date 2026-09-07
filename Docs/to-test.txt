@@ -186,14 +186,10 @@ Confirmed -> delete the line. Check failed -> move it to todo.txt.
   that each arrow moves the figure by the amount it should in BOTH directions.
 - SETUP ROW CAPTIONS renamed (2026-09-07): "Port" is now "MIDI out port" and "Analyse" is now
   "Analyse audio". Check the longer captions still fit the 150 px column before the value boxes.
-- COMPENSATION ACTUALLY COMPENSATES NOW (2026-09-07), and this is the one to test first. The phase
-  advance was wrapped into a single tick period, on the argument that a periodic stream shifted by a
-  whole tick is the same stream - false, because the device counts ticks from Start. The advance
-  delivered was ((D + L) mod P) - P: negative at every setting and non-monotonic. Simulated at
-  120 BPM against the real block loop, 11.8 ms asked gave 19.9 ms LATE and 21.9 ms asked gave 9.8 ms
-  late; with the wrap removed both give exactly what was asked. Test by ear: raise compensation and
-  the hits should move EARLIER, steadily, with no snap-back as the figure passes a tick period
-  (20.8 ms at 120 BPM). Then confirm the measured round trip on the panel falls as it should.
+- COMPENSATION: the end-to-end result is CONFIRMED (recordings align, with Live's Keep Latency on)
+  and is written up in findings.txt. What is NOT yet checked is the behaviour at the extremes -
+  that raising the figure past a tick period (20.8 ms at 120 BPM) no longer snaps back, and that a
+  tempo change mid-run does not disturb the grid.
 - The catch-up burst at the head of a run, which the fix above makes real: the first one or two
   ticks now go out together at the transport start because they cannot be sent earlier. Check that a
   run still STARTS cleanly - the opening beat is expected to be late, but nothing after it should be

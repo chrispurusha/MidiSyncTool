@@ -1567,3 +1567,27 @@ With compensation off nothing cancels the lead, so the whole grid goes out MS_LO
 setting X then returning to 0 mid-run skips the branch, leaving the old advance folded into the
 phase until the next transport start. Not fixed here because it changes what every compensation
 figure recorded so far means, which is CT's call.
+
+COMPENSATION WAS WRAPPED INTO ONE TICK AND THEREFORE NEVER WORKED (2026-09-07, fixed and now
+CT-confirmed by ear). The phase advance was reduced modulo a tick period on the argument that a
+periodic stream shifted by a whole tick is the same stream. False here: the device COUNTS ticks from
+the Start it was given, so a withheld tick is a device left a tick behind. The advance actually
+delivered was ((D + L) mod P) - P - negative at every setting and not monotonic in the dial.
+Simulated against the real block loop at 120 BPM (P = 20.833 ms): 11.8 ms asked delivered 19.9 ms
+LATE, 21.9 ms asked delivered 9.8 ms late. Reported as "compensation doesn't seem to be bringing
+forward late drum hits", which is exactly what it did. Fix: apply the whole advance, let the
+emission loop send the catch-up ticks, clamp their in-block offset (it goes NEGATIVE, and was about
+to be cast to uint64_t) and keep them out of the jitter statistics.
+
+ABLETON'S "Keep Latency" SHOULD BE LEFT ON, CT-confirmed the same day - recordings align with it on.
+It is Live's per-track record-monitoring latency setting (KeepRecordMonitoringLatency in the schema,
+beside MonitoringEnum; NOT a plug-in setting). The analysed audio arrives through the plug-in's own
+input bus, so with it on Live's delay compensation sits INSIDE the measured path: the round trip we
+report, and the compensation dialled from it, account for the host as well as the device, and a
+recorded take lands on the grid. Reasoning from measurement purity alone said the opposite - it
+would keep the figure "device only" - and the hardware test settled it. Now in the .dmg Read Me.
+
+THE OPEN ITEM ABOVE IS STILL OPEN AND NOW MATTERS MORE. The advance is still gated on
+compensationMs != 0.0, so returning to 0 mid-run still skips the branch - and the residual it leaves
+is no longer bounded by one tick, because the catch-up ticks the device was given are permanent.
+Still CT's call, for the reason recorded above.
