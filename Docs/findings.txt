@@ -4,6 +4,46 @@ Completed work, measurements, and the traps that cost real time.
 One entry per finding, newest first.
 
 
+2026-09-08  WHAT GenBridge'S BAD DAY MEANS HERE - AUDITED, NOT ASSUMED
+--------------------------------------------------------------------------------------------------
+GenBridge spent a session on a run of defects (its findings, 2026-09-08, entries 1-20). This file
+gets the conclusion of checking each class against THIS code rather than the reassurance of assuming
+they are the same project.
+
+TWO APPLY, and both are in todo.txt:
+
+  The destination table is rebuilt IN PLACE - gCount = 0, then milliseconds inside CoreMIDI. Narrower
+  exposure than GenBridge's, which did it once a second from a repaint: this runs once per instance
+  at initialize(). But the consequence is worse. A host loads every plug-in into one process, so a
+  SECOND MidiSyncTool loading into a running session drops the FIRST one's clock ticks for the length
+  of the enumeration. Dropped ticks are the exact failure this plug-in exists to prevent.
+
+  MIDIClientCreate() gets a NULL notify proc, so the lists are frozen at load and a synth switched on
+  later never appears in either menu.
+
+FIVE DO NOT, and the reasons are worth recording because they are design choices that paid off:
+
+  getLatencySamples() returns 0 and nothing calls restartComponent, so the feedback loop that cost
+  GenBridge an evening - a reported latency that MOVED, telling the host to reactivate, which reopened
+  the device, which moved it again - cannot form here at all.
+
+  There are no mutexes in the VST3 layer, so there is nothing for a host thread to block on. GenBridge
+  holds configLock across a device open that measures 1.4 seconds.
+
+  Every send is stamped. GenBridge mixed stamped and immediate sends and CoreMIDI delivered them in
+  timestamp order, which put note-offs ahead of their note-ons.
+
+  The log gate is already cached. GenBridge checked access() on every call until today - and this
+  file had it right first, which is worth saying in the direction it actually goes.
+
+  Ticks are stamped from a FILTERED timebase model rather than the raw block time. That is the same
+  conclusion GenBridge reached as "the model must be monotonic", arrived at here independently and
+  for the same underlying reason.
+
+ONE DORMANT: msDevice.c carries the same buffer-size setter that trusts noErr as confirmation. It has
+no caller, and the rate setter beside it already waits.
+
+
 2026-09-03  THE BLOCK-JITTER RMS NOW FORGETS, AND THE WORST CASE IS WHY THAT IS SAFE
 --------------------------------------------------------------------------
 Reported from real use: "it can take a while for the active RMS to gravitate towards a sensible

@@ -14,6 +14,9 @@ Open decisions (see Docs/design.md)
 
 Build
 
+- ms_midi_refresh() sets gCount = 0 and then spends milliseconds inside CoreMIDI, and that table is process-global - a host loads every plug-in into one process. A SECOND MidiSyncTool loading into a running session therefore drops the FIRST one's clock ticks for the length of the enumeration, since every send sees index >= gCount and returns false. Build into a shadow and publish the count last with a release, as GenBridge does since 2026-09-08; the same rebuild also needs serialising against itself
+- MIDIClientCreate() is passed a NULL notify proc, so the destination and source lists are whatever existed at load: a synth switched on afterwards never appears in the MIDI Dest or Clock Source menus, and nothing polls either. Add a notify proc that invalidates on kMIDIMsgSetupChanged (GenBridge gained one 2026-09-08)
+- DORMANT, fix only if monitor mode ever sets buffer sizes: msDevice.c's buffer-size setter returns AudioObjectSetPropertyData's noErr, which means the request was ACCEPTED and not that the device reconfigured - a read-back straight after can still report the old size. The rate setter already has an _and_wait variant; the buffer one does not, and nothing calls it today
 - First plug-in built 2026-09-02: loads, logs ProcessContext. NOT yet run in Live - see to-test.txt
 - Calibrate note-on/off latency as well as clock: send notes instead of clock and measure the audio onset the same way, so the device's note latency and its clock latency are separate data points rather than one blended figure
 - Calibration needs to GUIDE the user (pattern, audio routing, MIDI port) and check each step, not present a CALIBRATE button that silently returns a wrong number
