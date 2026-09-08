@@ -1631,3 +1631,49 @@ THE OPEN ITEM ABOVE IS STILL OPEN AND NOW MATTERS MORE. The advance is still gat
 compensationMs != 0.0, so returning to 0 mid-run still skips the branch - and the residual it leaves
 is no longer bounded by one tick, because the catch-up ticks the device was given are permanent.
 Still CT's call, for the reason recorded above.
+
+
+TWO MIDI ENUMERATION BUGS, CARRIED ACROSS FROM GenBridge (2026-09-08, built, not yet run in a host)
+
+Both were found in GenBridge and fixed there the same day; msMidi.c had the same two, because it was
+written from the same starting point. Neither can be seen by testing one plug-in on a settled rig,
+which is why they were noted rather than observed here.
+
+ONE: A REBUILD STOPPED EVERY OTHER INSTANCE'S CLOCK. ms_midi_refresh() set gCount = 0 and then spent
+milliseconds inside CoreMIDI. The destination table is process-global - a host loads every plug-in
+into one process - so for that whole window every send in the process saw "index >= gCount" and
+returned false. A SECOND MidiSyncTool arriving in a running session therefore dropped the FIRST
+one's ticks for the length of the enumeration, on an instance that was not the one enumerating and
+had no way of knowing why. In GenBridge the same shape showed as notes going missing once a second
+while a panel was open, and looked exactly like two instances interfering with each other.
+
+The list is now built into a shadow and copied in, with the COUNT published last with a release and
+read with an acquire, so a reader indexing below the count it loaded sees entries written before it.
+Rebuilds serialise against each other on a mutex that no send and no listen ever takes - the atomic
+count is what makes that safe. What is NOT fixed by this is that a slot can name a different
+endpoint after a rebuild; that is the todo line above about the selection following the name.
+
+TWO: THE LISTS WERE WHATEVER EXISTED AT LOAD. MIDIClientCreate() was passed a NULL notify proc and
+nothing polled, so a synth switched on after the plug-in loaded never appeared in the MIDI out port
+or Clock in menus for the life of the session - and the endpoint refs held for anything unplugged
+were stale. CoreMIDI now says so: the notify proc sets a flag on kMIDIMsgSetupChanged, and the two
+menu-opening CLICKS act on it through ms_midi_refresh_if_changed(). A click, deliberately: the
+enumeration takes CoreMIDI's locks, so it cannot go in the 30 Hz repaint - GenBridge's original trap
+- and must not go on the audio thread. The flag is cleared BEFORE the walk, so a device arriving
+during it sets the flag again rather than being swallowed.
+
+AND ONE THING THE FIX ITSELF NEEDED: the source being listened to is now held as an ENDPOINT, and
+ms_midi_listening() works the index out from it on demand rather than remembering one. A stored
+index was as good as an endpoint while the lists could never change; once they can, a rebuild moves
+it - and a disconnect aimed at the old slot would disconnect somebody else's port while leaving ours
+connected. It also removes the write that a rebuilding editor and the audio thread would have been
+racing over, since ms_midi_listen() runs inside process().
+
+VERIFIED OFFLINE, WITH NO HARDWARE AND NOTHING TO SWITCH ON: tools/midiListTest.c creates and
+disposes VIRTUAL endpoints in its own process, which is a genuine kMIDIMsgSetupChanged. It checks
+that a new destination is invisible until the notification arrives and present immediately after;
+that a second refresh is then not needed; that the port leaves the list when it is disposed; and -
+the reason the listening side holds an endpoint - that disposing a source EARLIER in the list moves
+the one being listened to from index 11 to 10 with the connection intact, and that disposing the
+source itself reads as listening to nothing. All checks pass. What none of it exercises is a host:
+two instances, a running clock and a real interface are still on the to-test list.

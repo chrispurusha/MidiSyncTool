@@ -1178,6 +1178,12 @@ bool ms_draw_click(double x, double y, tMsEditRequest * request) {
     }
 
     if (hit(row_value(0), x, y)) {
+        // A CLICK IS WHERE THE LIST IS RE-READ, and the only place it can be. Enumerating CoreMIDI
+        // takes its locks, so it cannot go in the 30 Hz repaint that draws this row - GenBridge's
+        // trap exactly - and it must not go on the audio thread. A menu about to be opened is the
+        // one moment the list has to be right, and this thread is the one allowed to make it so.
+        ms_midi_refresh_if_changed();
+
         // The whole destination list plus the None at the top of it.
         open_menu(eMsEditMidiDest, ms_midi_count() + 1, row_value(0));
         return true;
@@ -1213,6 +1219,8 @@ bool ms_draw_click(double x, double y, tMsEditRequest * request) {
     }
 
     if (hit(row_value(4), x, y)) {
+        ms_midi_refresh_if_changed();   // as the destination row above, and for the same reason
+
         // The whole source list plus the None at the top of it.
         open_menu(eMsEditClockSource, ms_midi_source_count() + 1, row_value(4));
         return true;

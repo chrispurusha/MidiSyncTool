@@ -194,3 +194,25 @@ Confirmed -> delete the line. Check failed -> move it to todo.txt.
   ticks now go out together at the transport start because they cannot be sent earlier. Check that a
   run still STARTS cleanly - the opening beat is expected to be late, but nothing after it should be
   - and that the worst-case jitter figure is not polluted (those ticks are excluded from the stats).
+
+- THE MIDI LISTS RE-READING THEMSELVES (2026-09-08). The mechanism is verified offline against
+  virtual endpoints by tools/midiListTest.c; what follows is the same thing through a real host and
+  real hardware, which nothing below has been. With the plug-in loaded and a session running, switch
+  on a synth or plug in an interface, then open the MIDI out port menu: the new port must be in the
+  list. Before this it never appeared for the life of the session. Check the Clock in menu the same
+  way, and check the reverse - switch something OFF and confirm it leaves the list on the next menu
+  open rather than staying as a dead entry.
+- THAT THE RE-READ COSTS THE CLOCK NOTHING, which is the point of the shadow rebuild: run a clock to
+  hardware, provoke a setup change, open the menu, and confirm no late clocks and no audible stumble
+  at the moment the list is rebuilt. Then the case it was actually written for - a SECOND
+  MidiSyncTool loaded into the same set, clocking a different port, must not miss a tick while the
+  first one's menu is opened.
+- THAT LISTENING SURVIVES A REBUILD: pick a clock source, switch some OTHER MIDI device on or off so
+  the source list is rebuilt and the indices move, and confirm the CLOCK INPUT section keeps
+  reading - and that saving the set then writes the right source name. Then switch off the source
+  itself and confirm the log says it has gone away and the panel stops claiming to listen.
+- THE HAZARD THE REBUILD INTRODUCES, worth provoking deliberately while it is on the todo: with a
+  clock running to a chosen port, unplug a device that sits EARLIER in the destination list and
+  open the menu. The selection is an index, so the clock may now be driving the device that moved
+  into that slot. Confirm whether it does - that is the measurement the "selection should follow the
+  name" todo needs.

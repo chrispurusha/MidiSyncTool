@@ -32,7 +32,21 @@ extern "C" {
 // Rebuild the cached destination AND source lists. Talking to CoreMIDI takes its locks, so this is
 // NEVER called from drawing or from the audio thread - GenBridge learned that one the hard way, with
 // an enumeration inside a 30 Hz repaint contending with the opens it was driving.
+//
+// SAFE TO CALL WHILE OTHER INSTANCES ARE SENDING. The lists are process-global - a host loads every
+// plug-in into one process - and are rebuilt into a shadow with the count published last, so a
+// second MidiSyncTool arriving in a running session no longer drops the first one's ticks for the
+// length of an enumeration. Rebuilds serialise against each other.
 void ms_midi_refresh(void);
+
+// HAS THE MIDI SETUP CHANGED SINCE THE LAST REBUILD? A synth switched on after load used to be
+// invisible for the life of the session: the client was created with no notify proc and nothing
+// polled. CoreMIDI now says so, and this reports it.
+bool ms_midi_setup_changed(void);
+
+// Rebuild only if it has, and say whether it did. This is the call a UI makes - from a CLICK, which
+// is a thread that may take CoreMIDI's locks, and never from a repaint.
+bool ms_midi_refresh_if_changed(void);
 
 int ms_midi_count(void);
 void ms_midi_name(int index, char * out, unsigned long len);
