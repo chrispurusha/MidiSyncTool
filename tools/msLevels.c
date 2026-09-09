@@ -17,10 +17,7 @@
 //
 // device.c is SynthLib's since 2026-09-09 - it used to be src/msDevice.c.
 
-//     clang -O2 -std=gnu11 -Wall -I ../SynthLib/audio -o msLevels msLevels.c \
-//         ../SynthLib/audio/device.c -framework CoreAudio -framework CoreFoundation
-//
-// device.c is SynthLib's since 2026-09-09 - it used to be src/msDevice.c.#include <math.h>
+#include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
