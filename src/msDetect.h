@@ -25,7 +25,7 @@ extern "C" {
 //
 // Those extra terms are CONSTANT for a given rig and buffer size, which is what makes the whole
 // exercise viable: a constant is subtractable once measured. GenBridge learned to enumerate exactly
-// these terms (device latency, safety offset, buffer, stream latency) and msDevice.c already
+// these terms (device latency, safety offset, buffer, stream latency) and SynthLib/audio/device.c already
 // reports them. Until they are subtracted, this is a round-trip figure and is labelled as one.
 //
 // THE JITTER FIGURE NEEDS NO SUCH APOLOGY. Every constant cancels in the deviation, so the spread is

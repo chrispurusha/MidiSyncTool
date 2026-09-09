@@ -1729,3 +1729,10 @@ AND THE POINT OF ALL OF IT, which was proved before the move rather than argued:
 device.c had already drifted. GenBridge's had a confirmed buffer-size setter and a
 device_wait_until_idle() that this one never received, and this project's harness was calling the
 unconfirmed setter on every run. One copy now, so that cannot happen again.
+
+METAL ONLY ON macOS, INHERITED (2026-09-09). SynthLib's renderBackendSelect.h now defines
+SYNTHLIB_NO_GL_BACKEND on every Apple target, so this plug-in's build lost the OpenGL backend without
+a line of its own changing - its view has only ever chosen Metal. renderBackendGL.c stays in do-vst3's
+source list, where it compiles to nothing on macOS and is the whole renderer for the Windows and
+Linux builds to come; -framework OpenGL is off the link line, and nm reports zero undefined gl*
+symbols. SYNTHLIB_ALLOW_GL_ON_APPLE brings it all back for an A/B.
