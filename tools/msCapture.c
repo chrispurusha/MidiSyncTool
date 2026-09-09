@@ -9,6 +9,11 @@
 //
 // Writes one channel as raw 32-bit floats. Deliberately not a WAV: nothing here reads it but a
 // script, and a header is one more thing to get wrong.
+//
+//     clang -O2 -std=gnu11 -Wall -I ../SynthLib/audio -o msCapture msCapture.c \
+//         ../SynthLib/audio/device.c -framework CoreAudio -framework CoreFoundation
+//
+// device.c is SynthLib's since 2026-09-09 - it used to be src/msDevice.c.
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -16,7 +21,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "msDevice.h"
+#include "device.h"
 
 static float *          gBuffer;
 static _Atomic uint64_t gWritten;

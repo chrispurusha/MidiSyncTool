@@ -41,35 +41,32 @@
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 
 #include "msEditor.h"
+#include "msLog.h"
 #include "msStatus.h"
 #include "msView.h"
 
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
-// Same gate as the processor's log_line(): touch /tmp/genbridge-log to turn it on. Resize is
-// negotiated between host and plug-in over several calls per pointer move, and no amount of staring
-// at the code shows which rects a given host actually asks for - two versions of
+// Resize is negotiated between host and plug-in over several calls per pointer move, and no amount
+// of staring at the code shows which rects a given host actually asks for - two versions of
 // checkSizeConstraint() were reasoned out and both were wrong. This is how the next one gets
-// evidence instead.
+// evidence instead: touch MS_LOG_GATE_PATH and read MS_LOG_PATH.
+//
+// THROUGH msLog.c, AND THAT IS THE FIX FOR WHAT IT USED TO DO. This whole function was copied from
+// GenBridge's editor and kept ITS paths: the gate was /tmp/genbridge-log and the output was
+// /tmp/genbridge.log, so touching this project's gate did nothing for these lines and touching the
+// other project's put them in the other project's log. Nobody would find that by reading the
+// resize code, which is where the eye goes.
 static void ms_editor_log(const char * format, ...) {
-    if (access("/tmp/genbridge-log", F_OK) != 0) {
-        return;
-    }
-
-    FILE * file = fopen("/tmp/genbridge.log", "a");
-
-    if (file == nullptr) {
-        return;
-    }
+    char    line[512];
     va_list args;
 
     va_start(args, format);
-    fprintf(file, "[editor] ");
-    vfprintf(file, format, args);
-    fprintf(file, "\n");
+    vsnprintf(line, sizeof(line), format, args);
     va_end(args);
-    fclose(file);
+
+    ms_log_line("[editor] %s", line);
 }
 
 class MidiSyncToolEditorView : public IPlugView {

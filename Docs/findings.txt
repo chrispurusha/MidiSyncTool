@@ -1677,3 +1677,55 @@ the reason the listening side holds an endpoint - that disposing a source EARLIE
 the one being listened to from index 11 to 10 with the connection intact, and that disposing the
 source itself reads as listening to nothing. All checks pass. What none of it exercises is a host:
 two instances, a running clock and a real interface are still on the to-test list.
+
+
+THE BUFFER-SIZE SETTER WAS NEVER DORMANT (2026-09-09, fixed by taking GenBridge's version)
+
+The todo carried it as "DORMANT, fix only if monitor mode ever sets buffer sizes... nothing calls it
+today". Nothing in the PLUG-IN calls it - msDevice.c and msRing.c are not even in do-vst3's source
+list, they are compiled only into tools/mstDriver. And mstDriver calls it, on every run that names an
+audio device:
+
+    device_set_sample_rate_and_wait(audioInfo.id, rate);
+    device_set_buffer_frames(audioInfo.id, (uint32_t)block);
+    rate  = device_sample_rate(audioInfo.id);
+    block = (int32)device_buffer_frames(audioInfo.id);      <- read back immediately
+
+AudioObjectSetPropertyData() returning noErr means the request was ACCEPTED, not that the device has
+reconfigured; CoreAudio applies a buffer change asynchronously. So the read-back two lines later can
+return the OLD size - and the harness then prints that size, and runs the whole measurement against
+whatever the device actually settled at. A run labelled "--block 64" could be a measurement at 512.
+
+GenBridge hit exactly this from the other end ("attempting to set 64, getting 512" on a project load,
+findings 2026-09-08) and fixed it there by CONFIRMING the change: set, then poll device_buffer_frames
+for up to 120 ms. That function has now been copied into msDevice.c, along with
+device_wait_until_idle() which the same file was missing, and the two copies are once again identical
+apart from the header comment and the include - which is what both of them claim to be in their own
+first paragraph.
+
+WHAT THIS SAYS ABOUT "VERBATIM COPY, FIX IT IN BOTH". The comment at the top of msDevice.c says
+"Fix a bug here and fix it there". It did not happen: two fixes went into GenBridge's copy and
+neither reached this one, and nothing anywhere would have said so. The drift was found by diffing the
+two files, not by reading either.
+
+
+THE DEVICE, THE RING AND THE STUBS ARE SynthLib's NOW (2026-09-09)
+
+src/msDevice.c, src/msDevice.h, src/msRing.c, src/msRing.h and vst3/msAppStubs.c are deleted. They
+are SynthLib/audio/device.*, SynthLib/audio/ring.* and SynthLib/plugin/pluginStubs.c, and this
+project's pin was advanced from bb5f606 to 6f2bee6 to reach them.
+
+CHECKED BEFORE DELETING, not after: every one of the five was compared line for line against the
+shared copy with comments and the include/guard names normalised away, and all five were IDENTICAL.
+The only edits needed were the include lines - "msDevice.h" became "device.h" - because the function
+names (device_*, ring_*) were already the same in both.
+
+WHAT CHANGED IN THE BUILD: do-vst3 takes pluginStubs.c from SynthLib/plugin and gains
+-I SynthLib/audio -I SynthLib/plugin; tools/do-driver compiles device.c and ring.c out of
+SynthLib/audio. tools/msCapture.c and tools/msLevels.c have no build script - they are compiled by
+hand - so each now carries its clang line in its header, and both lines were run to check they work.
+
+AND THE POINT OF ALL OF IT, which was proved before the move rather than argued: the two copies of
+device.c had already drifted. GenBridge's had a confirmed buffer-size setter and a
+device_wait_until_idle() that this one never received, and this project's harness was calling the
+unconfirmed setter on every run. One copy now, so that cannot happen again.

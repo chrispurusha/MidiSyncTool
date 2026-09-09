@@ -34,7 +34,10 @@ C_SOURCES=(
     "$HERE/src/msProbe.c"
     "$HERE/vst3/msStatus.c"
     "$HERE/vst3/msDraw.c"
-    "$HERE/vst3/msAppStubs.c"
+
+    # SHARED, from SynthLib but NOT SynthLib/src - see the header of SynthLib/audio/device.c for why
+    # that distinction matters. This file was vst3/msAppStubs.c and was identical to GenBridge's.
+    "$HERE/SynthLib/plugin/pluginStubs.c"
 
     # SynthLib, and only the parts a plug-in panel needs - the same manual list GenBridge keeps, and
     # manual for the same reason: nothing here is a synchronised folder, so a new SynthLib file has
@@ -76,7 +79,8 @@ CPP_SOURCES=(
 )
 
 # glfw is here for its HEADERS ONLY - SynthLib's key and mouse constants come from them.
-INCLUDES=(-I"$HERE/src" -I"$HERE/vst3" -I"$HERE/SynthLib/src" -I"$SDK"
+INCLUDES=(-I"$HERE/src" -I"$HERE/vst3" -I"$HERE/SynthLib/src"
+          -I"$HERE/SynthLib/audio" -I"$HERE/SynthLib/plugin" -I"$SDK"
           -I"$HERE/SynthLib/ThirdParty/glfw/include"
           -I"$HERE/SynthLib/ThirdParty/freetype/include")
 

@@ -47,8 +47,8 @@
 #include <CoreAudio/HostTime.h>
 
 extern "C" {
-#include "msDevice.h"
-#include "msRing.h"
+#include "device.h"
+#include "ring.h"
 }
 
 #include "pluginterfaces/base/funknown.h"

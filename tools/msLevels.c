@@ -11,15 +11,23 @@
 // each one, which settles it in five seconds.
 //
 // usage: msLevels <device name> [seconds]
+//
+//     clang -O2 -std=gnu11 -Wall -I ../SynthLib/audio -o msLevels msLevels.c \
+//         ../SynthLib/audio/device.c -framework CoreAudio -framework CoreFoundation
+//
+// device.c is SynthLib's since 2026-09-09 - it used to be src/msDevice.c.
 
-#include <math.h>
+//     clang -O2 -std=gnu11 -Wall -I ../SynthLib/audio -o msLevels msLevels.c \
+//         ../SynthLib/audio/device.c -framework CoreAudio -framework CoreFoundation
+//
+// device.c is SynthLib's since 2026-09-09 - it used to be src/msDevice.c.#include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include "msDevice.h"
+#include "device.h"
 
 #define MAX_CHANNELS    (64)
 

@@ -3,6 +3,11 @@ MidiSyncTool TO TEST
 Finished code that is built but not yet checked against a real host.
 Confirmed -> delete the line. Check failed -> move it to todo.txt.
 
+- THE CONFIRMED BUFFER SETTER (2026-09-09), which changes what a measurement run means: run
+  mstDriver with --block at a size the device is NOT already at, and confirm the line it prints
+  names the size you asked for rather than the previous one. Before this the set was fire and
+  forget and the read-back could return the old size. Worth re-reading any measurement whose
+  block size looks wrong for its numbers.
 - THE "CLEAR THESE FIGURES" BUTTON (2026-09-03), on the Clocks sent / Fitted grid row. Let a run
   build up a worst case, press it, and check that commit margin, late clocks, block jitter AND its
   worst case, the drift window, the measured BPM and the trace all go back to nothing together -
