@@ -23,7 +23,7 @@ extern "C" {
 //
 // The measurement that decided it: 200 clocks at 24 PPQN / 120 BPM through IAC, timed on arrival.
 // Scheduled ahead gave 0.019 ms RMS with no drift; sent immediately from a sleeping loop gave
-// 4.157 ms RMS and a 3.9 ms MEAN error. See Docs/findings.txt.
+// 4.157 ms RMS and a 3.9 ms MEAN error. See Docs/findings.md.
 
 #define MS_MIDI_MAX_DEST      (64)
 #define MS_MIDI_MAX_SOURCE    (64)

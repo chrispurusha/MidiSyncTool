@@ -1,7 +1,7 @@
 #!/bin/zsh
 
-# Builds a universal (arm64 + x86_64) MidiSyncTool.vst3 and packages it as a .dmg
-# ready to attach to a GitHub release.
+# Builds universal (arm64 + x86_64) MidiSyncTool.vst3 and MidiSyncTool.component
+# and packages them as a .dmg ready to attach to a GitHub release.
 #
 # There is no application here - MidiSyncTool is a plug-in and nothing else - so
 # this is the plug-in equivalent of G2-Edit/do-release, and deliberately reads
@@ -52,6 +52,7 @@ DIST="${DIST:a}"
 cd ${0:a:h}
 
 VST3_NAME="MidiSyncTool.vst3"
+AU_NAME="MidiSyncTool.component"
 VOL_NAME="MidiSyncTool"
 
 # OUTSIDE THE PROJECT, AND REMOVED ON THE WAY OUT. Both halves of that matter, and
@@ -74,7 +75,7 @@ trap 'rm -rf "$DERIVED" "$STAGE"' EXIT
 
 # --- version -------------------------------------------------------------
 
-# Git tags are the source of truth. MST_VERSION's default inside do-vst3 is a
+# Git tags are the source of truth. MST_VERSION's default inside do-plugin is a
 # placeholder for developer builds and is deliberately overridden here.
 #
 # --sort=-v:refname orders by version rather than alphabetically, so beta.10 is
@@ -185,24 +186,26 @@ echo "==> clean build, universal"
 # race anything else writing there. See the DERIVED note at the top for why it is
 # no longer a subdirectory of build/ either.
 #
-# MST_NO_INSTALL matters just as much: do-vst3 installs into
-# /Library/Audio/Plug-Ins/VST3 by default, and making a .dmg is not consent to
-# replace the plug-in the machine is currently running.
+# --no-install matters just as much: do-plugin installs into /Library/Audio/Plug-Ins
+# by default, and making a .dmg is not consent to replace the plug-ins the machine
+# is currently running. Naming an output directory stops it installing too.
 if ! MST_VERSION="$VERSION_CLEAN" \
-     MST_VST3_OUT="$DERIVED/$VST3_NAME" \
-     MST_NO_INSTALL=1 \
-     ./do-vst3 >/dev/null; then
-    echo "error: the VST3 build failed - run ./do-vst3 on its own for the reason" >&2
+     MST_PLUGIN_OUT_DIR="$DERIVED" \
+     ./do-plugin --no-install >/dev/null; then
+    echo "error: the plug-in build failed - run ./do-plugin on its own for the reason" >&2
     echo "       (needs the VST3 SDK; set VST3_SDK if it is not in ~/Documents/vst3sdk)" >&2
     exit 1
 fi
 
 VST3_BUNDLE="$DERIVED/$VST3_NAME"
+AU_BUNDLE="$DERIVED/$AU_NAME"
 
-if [[ ! -d $VST3_BUNDLE ]]; then
-    echo "error: do-vst3 reported success but $VST3_BUNDLE is not there" >&2
-    exit 1
-fi
+for bundle in "$VST3_BUNDLE" "$AU_BUNDLE"; do
+    if [[ ! -d $bundle ]]; then
+        echo "error: do-plugin reported success but $bundle is not there" >&2
+        exit 1
+    fi
+done
 
 # --- verify --------------------------------------------------------------
 
@@ -210,35 +213,54 @@ BINARY="$VST3_BUNDLE/Contents/MacOS/MidiSyncTool"
 ARCHS=$(lipo -archs "$BINARY" 2>/dev/null || echo "")
 
 # A single-architecture plug-in would load for half the users and be invisible to
-# the other half, with no error either side could act on.
-if [[ $ARCHS != *arm64* || $ARCHS != *x86_64* ]]; then
-    echo "error: expected a universal binary, got '$ARCHS'" >&2
-    exit 1
-fi
+# the other half, with no error either side could act on. Both formats are two
+# separate binaries, so both are checked.
+for binary in "$BINARY" "$AU_BUNDLE/Contents/MacOS/MidiSyncTool"; do
+    archs=$(lipo -archs "$binary" 2>/dev/null || echo "")
+
+    if [[ $archs != *arm64* || $archs != *x86_64* ]]; then
+        echo "error: expected a universal binary, got '$archs' for ${binary:h:h:h:t}" >&2
+        exit 1
+    fi
+done
 
 echo "==> built $ARCHS"
 
-# Confirm the version actually reached the bundle, so the .dmg name and what the
+# Confirm the version actually reached both bundles, so the .dmg name and what the
 # host reports can never disagree.
-PLIST_VERSION=$(defaults read "${VST3_BUNDLE:a}/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "")
+for bundle in "$VST3_BUNDLE" "$AU_BUNDLE"; do
+    PLIST_VERSION=$(defaults read "${bundle:a}/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "")
 
-if [[ $PLIST_VERSION != $VERSION_CLEAN ]]; then
-    echo "error: Info.plist says '$PLIST_VERSION', expected '$VERSION_CLEAN'" >&2
+    if [[ $PLIST_VERSION != $VERSION_CLEAN ]]; then
+        echo "error: ${bundle:t}'s Info.plist says '$PLIST_VERSION', expected '$VERSION_CLEAN'" >&2
+        exit 1
+    fi
+done
+
+# THE AUDIO UNIT'S COMPONENT, checked in the plist rather than the binary: macOS
+# finds an Audio Unit by reading its Info.plist and never looks further.
+AU_CODES="$(/usr/libexec/PlistBuddy -c "Print :AudioComponents:0:type" "$AU_BUNDLE/Contents/Info.plist" 2>/dev/null):$(/usr/libexec/PlistBuddy -c "Print :AudioComponents:0:subtype" "$AU_BUNDLE/Contents/Info.plist" 2>/dev/null)"
+
+if [[ $AU_CODES != "aufx:MSyn" ]]; then
+    echo "error: the Audio Unit registers '$AU_CODES', expected 'aufx:MSyn'" >&2
     exit 1
 fi
 
-echo "==> bundle version $PLIST_VERSION"
+echo "==> bundle version $PLIST_VERSION in both; the Audio Unit is aufx MSyn CPur"
 
 # --- sign ----------------------------------------------------------------
 
 # Ad-hoc signature. Not a substitute for notarization, but it keeps the bundle
-# internally consistent so it loads once quarantine is cleared. do-vst3 signs it
-# too; this re-signs after xattr -cr, because clearing extended attributes
+# internally consistent so it loads once quarantine is cleared. do-plugin signs
+# them too; this re-signs after xattr -cr, because clearing extended attributes
 # invalidates the signature that was there.
 echo "==> ad-hoc signing"
-xattr -cr "$VST3_BUNDLE"
-codesign --force --options runtime --sign - "$VST3_BUNDLE"
-codesign --verify --strict "$VST3_BUNDLE"
+
+for bundle in "$VST3_BUNDLE" "$AU_BUNDLE"; do
+    xattr -cr "$bundle"
+    codesign --force --options runtime --sign - "$bundle"
+    codesign --verify --strict "$bundle"
+done
 
 # --- stage ---------------------------------------------------------------
 
@@ -258,6 +280,7 @@ VOLUME="${VOLUME[1,27]}"
 STAGE=$(mktemp -d)
 
 cp -R "$VST3_BUNDLE" "$STAGE/"
+cp -R "$AU_BUNDLE" "$STAGE/"
 
 # NO SYMLINK TO THE VST3 FOLDER, deliberately. /Library/Audio/Plug-Ins/VST3 could
 # be linked to, but the per-user alternative lives under the builder's own home
@@ -270,8 +293,12 @@ $VOL_NAME $VERSION_CLEAN
 
 WHAT IT IS
 
-MidiSyncTool is a VST3 plug-in that generates MIDI clock from your DAW's own
-musical timeline, and then measures what your hardware actually did with it.
+MidiSyncTool is a plug-in that generates MIDI clock from your DAW's own musical
+timeline, and then measures what your hardware actually did with it. It comes in
+two formats - install whichever your host uses, or both:
+
+  $VST3_NAME       the VST3        - Ableton Live, Bitwig, Cubase, Reaper...
+  $AU_NAME  the Audio Unit  - Logic, GarageBand, MainStage...
 
 It does two jobs:
 
@@ -287,8 +314,8 @@ It can do both at once, or either on its own. Measuring is the setting-up job;
 once you know what your hardware does, leave it generating the clock and
 nothing else. That is what the Mode control below is for.
 
-There is no application - the plug-in is the whole thing, and it needs a VST3
-host to run in.
+There is no application - the plug-in is the whole thing, and it needs a VST3 or
+Audio Unit host to run in.
 
 STEP 1 - INSTALL
 
@@ -311,20 +338,28 @@ There is a second, per-user folder at ~/Library/Audio/Plug-Ins/VST3 which also
 works. Use one or the other - a copy in both means your host may list the
 plug-in twice and load whichever it finds first.
 
+THE AUDIO UNIT goes in the Components folder instead, the same way:
+
+    cp -R "/Volumes/$VOLUME/$AU_NAME" /Library/Audio/Plug-Ins/Components/
+
 STEP 2 - UNLOCK
 
 This plug-in is not notarized by Apple, so macOS quarantines it and your host
 will refuse to load it with no useful explanation - usually by simply not
-listing it after a scan. Open Terminal and run:
+listing it after a scan. Open Terminal and run - the second line only if you
+installed the Audio Unit:
 
     xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/VST3/"$VST3_NAME"
+    xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/Components/"$AU_NAME"
 
-It prints nothing if it worked. You only need to do this once, and again after
-each update. If you installed to the per-user folder instead, change the path in
-the command to match.
+They print nothing if they worked. You only need to do this once, and again
+after each update. If you installed to the per-user folder instead, change the
+path in the command to match.
 
 Then rescan plug-ins in your host - most do it at startup. It appears as
-"MidiSyncTool" by Chris Purusha.
+"MidiSyncTool" by Chris Purusha. macOS keeps its own list of Audio Units and can
+go on offering the version it saw first; if an update does not seem to have
+taken, "killall -9 AudioComponentRegistrar" in Terminal makes it look again.
 
 USING IT
 
@@ -388,7 +423,7 @@ fast pattern.
 REQUIREMENTS
 
 macOS 11.5 or later, Apple Silicon or Intel.
-A VST3 host. It does not work on its own.
+A VST3 or Audio Unit host. It does not work on its own.
 EOF
 
 # --- package -------------------------------------------------------------
@@ -409,7 +444,7 @@ hdiutil create \
 
 echo
 echo "done: $DMG ($(du -h "$DMG" | cut -f1))"
-echo "contents: $VST3_NAME ($ARCHS)"
+echo "contents: $VST3_NAME + $AU_NAME ($ARCHS)"
 echo "signature: ad-hoc, NOT notarized - users must clear quarantine"
 
 if [[ -n $NEW_TAG ]]; then

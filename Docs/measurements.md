@@ -1,7 +1,7 @@
 # Measurements
 
 Standing results for MidiSyncTool. Updated as figures are taken; the narrative of how each was
-arrived at, and the traps along the way, are in [`findings.txt`](findings.txt).
+arrived at, and the traps along the way, are in [`findings.md`](findings.md).
 
 **Rig throughout:** Tempest (drum machine) with audio on QU-24 inputs 15/16 (index 14), Cirklon 2
 where noted, MacBook running Ableton Live. All figures 2026-09-03.

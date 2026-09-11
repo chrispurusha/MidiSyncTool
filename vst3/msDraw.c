@@ -745,7 +745,7 @@ void ms_draw_frame(int pixelWidth, int pixelHeight) {
     // ONLY WHEN IT HAPPENS, because on a host that does not split there is nothing to say and a
     // permanent "0" would read as a fault waiting to happen. When it does happen it belongs here:
     // it is the host's own behaviour at a loop boundary, it is corrected for rather than measured
-    // as jitter (see the note in msVst3.cpp's process()), and a reader comparing this figure with
+    // as jitter (see the note in msPlugin.c's ms_process()), and a reader comparing this figure with
     // an older session's needs to know which of the two builds produced it.
     unsigned splits  = (unsigned)atomic_load(&status->blockSplits);
 

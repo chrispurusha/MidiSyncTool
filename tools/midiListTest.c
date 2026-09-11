@@ -1,7 +1,7 @@
 // Do the MIDI destination and source lists notice the world changing under them?
 //
 // Both of the bugs this answers were carried over from GenBridge and fixed on 2026-09-08 (see
-// Docs/findings.txt): the lists were whatever existed when the plug-in loaded, and rebuilding one
+// Docs/findings.md): the lists were whatever existed when the plug-in loaded, and rebuilding one
 // blanked it for every other instance in the host process for the length of a CoreMIDI walk. Neither
 // can be seen by watching one plug-in on a settled rig, which is why this exists - it makes the world
 // change on purpose, by creating and disposing VIRTUAL endpoints in this process. That is a real

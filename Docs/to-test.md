@@ -1,7 +1,22 @@
 MidiSyncTool TO TEST
 
 Finished code that is built but not yet checked against a real host.
-Confirmed -> delete the line. Check failed -> move it to todo.txt.
+Confirmed -> delete the line. Check failed -> move it to todo.md.
+
+- ***VST3 AND AUDIO UNIT, ON SYNTHLIB'S SHARED WRAPPERS (2026-09-11)*** - msVst3.cpp and msEditor.mm
+  are gone; vst3/msPlugin.c carries the processor's logic across unchanged and describes the plug-in
+  to SynthLib/plugin/, and ./do-plugin builds MidiSyncTool.vst3 and MidiSyncTool.component (aufx MSyn
+  CPur). Checked offline: auval clean; both editors open (GenBridge's tools/vst3host, G2-Edit's
+  tools/auhost); tools/mstDriver --realtime through IAC, three runs each against the pre-port build:
+  333 ticks every time, interval RMS 0.020-0.023 ms new against 0.019-0.022 ms old, and the plug-in's
+  own log shows identical loop-wrap handling. STILL TO CHECK in Live: (1) an existing set reopens with
+  its port, mode, compensation and clock source - the class ids are unchanged and the saved bytes
+  identical; (2) a saved port whose INDEX has moved is now also corrected in Live's own panel; (3)
+  loop wraps still give exactly one tick each on a 512-frame buffer, where Live splits the block;
+  (4) Clear still clears; (5) the editor size is remembered per set, which it never was. In Logic:
+  whether the clock runs at all - an Audio Unit's transport comes from HostCallbacks, which answer for
+  the host's position rather than the block being rendered, so its jitter needs measuring before it is
+  believed.
 
 - THE CONFIRMED BUFFER SETTER (2026-09-09), which changes what a measurement run means: run
   mstDriver with --block at a size the device is NOT already at, and confirm the line it prints
@@ -192,7 +207,7 @@ Confirmed -> delete the line. Check failed -> move it to todo.txt.
 - SETUP ROW CAPTIONS renamed (2026-09-07): "Port" is now "MIDI out port" and "Analyse" is now
   "Analyse audio". Check the longer captions still fit the 150 px column before the value boxes.
 - COMPENSATION: the end-to-end result is CONFIRMED (recordings align, with Live's Keep Latency on)
-  and is written up in findings.txt. What is NOT yet checked is the behaviour at the extremes -
+  and is written up in findings.md. What is NOT yet checked is the behaviour at the extremes -
   that raising the figure past a tick period (20.8 ms at 120 BPM) no longer snaps back, and that a
   tempo change mid-run does not disturb the grid.
 - The catch-up burst at the head of a run, which the fix above makes real: the first one or two

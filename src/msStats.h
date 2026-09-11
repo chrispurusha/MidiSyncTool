@@ -58,7 +58,7 @@ extern "C" {
 // ALL-TIME, so an event that has aged out of the window is still on the panel; the window answers
 // "is the host steady now" and the worst case answers "did anything go wrong at any point". The
 // all-time RMS is kept too, for the log's model-residual ratio, which would otherwise be comparing
-// a windowed figure against an all-time one - see the "model |" line in msVst3.cpp.
+// a windowed figure against an all-time one - see the "model |" line in vst3/msPlugin.c.
 //
 // TRIMMED BY TIME, NOT BY A BLOCK COUNT, so that the window is the same ten seconds whatever the
 // host's buffer size - and so a suspension inside it removes samples rather than stretching the

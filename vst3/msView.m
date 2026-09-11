@@ -19,9 +19,9 @@
 
 // The drawing surface, and nothing else.
 //
-// Plain Objective-C, not Objective-C++: nothing here needs C++, and gbEditor.mm is Objective-C++
-// only because IPlugView is a C++ interface that has to hand a Cocoa view to the host. Keeping the
-// languages separated that way is G2-Edit's arrangement and it is worth copying.
+// Plain Objective-C, not Objective-C++: nothing here needs C++. The window around it is SynthLib's -
+// an IPlugView on VST3, an AUCocoaUIBase container on an Audio Unit - and this view is what both of
+// them put inside, so the editor is written once for both formats.
 //
 // METAL, so a PLAIN NSView. Under Metal there is no context for the view to own - it is
 // layer-hosting and the CAMetalLayer is the surface - which is why there is no NSOpenGLView here
@@ -40,6 +40,7 @@
 @property (nonatomic, strong) NSTimer *       timer;
 @property (nonatomic, assign) int             statusSlot;
 @property (nonatomic, assign) tMsEditCallback callback;
+@property (nonatomic, assign) tMsSyncCallback sync;
 @property (nonatomic, assign) void *          user;
 @end
 
@@ -220,8 +221,14 @@
     // to do every frame and removes any need to track whose turn it is.
     gfx_attach_window((__bridge void *)self);
 
+    // THIS EDITOR'S INSTANCE, fetched fresh: its status slot and its parameter values.
+    if (self.sync != NULL) {
+        self.sync(self.user, (__bridge void *)self);
+    }
+
     // Both of these are file-scope in the draw layer, so they are asserted per frame rather than
-    // once - with two editors open, whichever drew last would otherwise speak for both.
+    // once - with two editors open, whichever drew last would otherwise speak for both. The values
+    // ms_view_set_values() hands on are file-scope too, which is why the sync above is per frame.
     ms_draw_set_status_slot(self.statusSlot);
 
     // ONE FRAME, ONE TRANSACTION. ms_draw_frame() moves the layer's geometry and gfx_present() hands
@@ -250,7 +257,11 @@
 
     // ASSERTED BEFORE THE HIT TEST, not just before the draw. The draw layer's notion of which
     // editor it is serving is file-scope and the hit test consults it, so with two instances open
-    // the repaint of one would otherwise decide where the other's clicks land.
+    // the repaint of one would otherwise decide where the other's clicks land. The values go with
+    // them, for the same reason: a click on a stepper steps from whatever the draw layer holds.
+    if (self.sync != NULL) {
+        self.sync(self.user, (__bridge void *)self);
+    }
     ms_draw_set_status_slot(self.statusSlot);
     ms_draw_set_mouse(x, y);        // a click is a position too, and a trackpad tap sends no move
 
@@ -319,13 +330,17 @@
 
 @end
 
-void * ms_view_create(double width, double height, tMsEditCallback callback, void * user,
-                      int statusSlot) {
+// RETAINED (+1), as SynthLib's createView() contract requires: the wrapper owns the view from here and
+// releases it after taking it out of the window - -removeFromSuperview above is where it lets go of
+// its timer and its drawing surface.
+void * ms_view_create(double width, double height, tMsEditCallback callback, tMsSyncCallback sync,
+                      void * user) {
     MsView * view = [[MsView alloc] initWithFrame:NSMakeRect(0.0, 0.0, width, height)];
 
     view.callback   = callback;
+    view.sync       = sync;
     view.user       = user;
-    view.statusSlot = statusSlot;
+    view.statusSlot = -1;             // slot 0 is a real one; nothing is known until the sync says
 
     return (__bridge_retained void *)view;
 }
@@ -340,18 +355,4 @@ void ms_view_set_status_slot(void * view, int statusSlot) {
     if (view != NULL) {
         ((__bridge MsView *)view).statusSlot = statusSlot;
     }
-}
-
-void ms_view_destroy(void * view) {
-    if (view == NULL) {
-        return;
-    }
-
-    MsView * v = (__bridge_transfer MsView *)view;
-
-    [[NSNotificationCenter defaultCenter] removeObserver:v];
-    [v.timer invalidate];
-    v.timer = nil;
-    [v removeFromSuperview];
-    gfx_detach_window((__bridge void *)v);
 }

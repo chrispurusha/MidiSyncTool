@@ -1,6 +1,6 @@
 # MIDI Sync Doctor — design notes before the build
 
-Written 2026-09-02 from `Concept.txt`, after a session spent inside GenBridge. Nothing is built yet.
+Written 2026-09-02 from `Concept.md`, after a session spent inside GenBridge. Nothing is built yet.
 This is what to reuse, what is genuinely new, and the decisions that want making before code.
 
 ## The one thing that decides the architecture
@@ -38,7 +38,7 @@ tick.
 | Telemetry block | `vst3/gbStatus.h` | lock-free processor → editor status, which is what every readout in the concept's UI needs |
 | Latency measurement | the `measure*` machine in `gbVst3.cpp` | **the big one — see below** |
 | Harnesses | `tools/vst3check`, `tools/vst3host` | including `--audio N`, `--click X,Y`, and the poll-until-open discipline |
-| Release | `do-vst3`, `do-release` | unchanged |
+| Release | `do-vst3`, `do-release` | unchanged (since 2026-09-11 `do-plugin`, building a VST3 and an Audio Unit) |
 
 ### The measurement machine is already most of section 4
 
@@ -96,6 +96,10 @@ to "a known sequence", not writing.
 `src/*.c` — logging already does. That is the split the sibling projects use, and it is the reason
 GenBridge's bridge core could be lifted into a command line tool without a rewrite: the only C++ in
 the tree is the part the VST3 interfaces make unavoidable.
+
+**Since 2026-09-11 there is no C++ of this project's own at all.** `msVst3.cpp` and `msEditor.mm` are
+gone: `vst3/msPlugin.c` describes the plug-in to SynthLib's shared wrappers (`SynthLib/plugin/`),
+which are the VST3 and the Audio Unit for all three plug-ins, and `./do-plugin` builds both formats.
 
 ## Suggested order for the first working session
 

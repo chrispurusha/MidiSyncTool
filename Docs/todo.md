@@ -1,8 +1,8 @@
 MidiSyncTool TODO
 
 Things to do. ONE LINE PER ITEM - keep it that way.
-Measurements, reasoning and completed-work narrative go in findings.txt, NOT here.
-Built-but-unchecked work goes in to-test.txt.
+Measurements, reasoning and completed-work narrative go in findings.md, NOT here.
+Built-but-unchecked work goes in to-test.md.
 
 Open decisions (see Docs/design.md)
 
@@ -17,7 +17,7 @@ Build
 - A REBUILD CAN NOW MOVE A SLOT UNDER A LIVE SELECTION (2026-09-08, the consequence of making the lists re-readable): the destination is held as an index, so a setup change while a clock is running can leave it pointing at a different device. The selection should follow the NAME, which means the processor re-resolving and reporting the corrected slot through data.outputParameterChanges so the host, the panel and the saved state stay in step
 - "Waiting for" should end by itself once the named port appears: the notify proc now knows when that happens, and the same name-follows-the-device mechanism as the line above is what would act on it
 - ms_midi_listen() runs on the AUDIO THREAD - apply_parameter() is called from take_parameter_changes() inside process() - so choosing a clock source does a CoreMIDI connect and a file write in a render callback. Only on a user action, but it is a block that can overrun
-- First plug-in built 2026-09-02: loads, logs ProcessContext. NOT yet run in Live - see to-test.txt
+- First plug-in built 2026-09-02: loads, logs ProcessContext. NOT yet run in Live - see to-test.md
 - Calibrate note-on/off latency as well as clock: send notes instead of clock and measure the audio onset the same way, so the device's note latency and its clock latency are separate data points rather than one blended figure
 - Calibration needs to GUIDE the user (pattern, audio routing, MIDI port) and check each step, not present a CALIBRATE button that silently returns a wrong number
 - mstDriver models loop wraps, tempo ramps (--ramp), varying block sizes (--vary) and Live's loop-boundary block split (--split, 2026-09-03): still needs playhead jumps while stopped
@@ -47,6 +47,7 @@ Build
 - CALIBRATE button on the panel: run the note probe and seed the compensation from what it measures - the applying half exists now ("Use measured", 2026-09-03), the RUNNING half does not
 - ms_clock_set_compensation_ms is gated on compensationMs != 0.0, so with compensation off the schedule lead is never cancelled and the whole grid runs MS_LOOKAHEAD_MS late; and going from X back to 0 mid-run leaves the old advance in the phase until the next transport start
 - Audio loopback to separate the interface's A/D from the device, so the breakdown's last row can be called device latency honestly
-- DONE 2026-09-09: msDevice, msRing and msAppStubs are gone, replaced by SynthLib/audio/device.c, SynthLib/audio/ring.c and SynthLib/plugin/pluginStubs.c. STILL DUPLICATED with GenBridge: msView.m 91% and msEditor.mm 78%, which need a small per-project interface first - see SynthLib/TODO.md
-- msVst3.cpp (1,445 lines) could have the treatment GenBridge's wrapper just had: the COM class keeps only the VST3 API and everything else - the clock, the saved state, the parameter table - moves to C beside it. The seam that worked there is GenBridge/vst3/gbBridge.h: a ProcessData becomes four calls, an IBStream becomes bytes, and the two things only a wrapper can do go through a small host-ops struct
+- DONE 2026-09-09: msDevice, msRing and msAppStubs are gone, replaced by SynthLib/audio/device.c, SynthLib/audio/ring.c and SynthLib/plugin/pluginStubs.c; and 2026-09-11 msEditor.mm, replaced by SynthLib's shared editor window. STILL DUPLICATED with GenBridge: msView.m/gbView.m 91% - both now take the same edit and sync callbacks, so one shared view with a per-project draw hook is the obvious next step
+- vst3/ holds the plug-in layer for BOTH formats since 2026-09-11 and is misnamed - G2-Edit renamed its own to plugin/; move it with do-plugin's list and tools/do-driver's -I in one change
+- THE SUBMODULE HAS UNPUSHED WORK (2026-09-11): SynthLib/plugin/ and src/renderBackendGL.c were changed in G2-Edit's checkout and COPIED into this one - diff against G2-Edit/SynthLib, discard the copies (git -C SynthLib checkout -- .) before pulling once it is pushed, then advance the pin
 - Drift needs a long window to mean anything: tick quantisation alone moves it hundreds of ppm over a few seconds. Say so on the display rather than showing a figure that swings

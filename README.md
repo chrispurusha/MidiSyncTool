@@ -30,9 +30,9 @@ of clock masters. The short version: on this rig the drum machine's own timing f
 difference between clock sources, and what actually separates the masters is **tempo accuracy**, not
 jitter.
 
-The concept is in [`Docs/Concept.txt`](Docs/Concept.txt), the design thinking and open decisions in
+The concept is in [`Docs/Concept.md`](Docs/Concept.md), the design thinking and open decisions in
 [`Docs/design.md`](Docs/design.md), and the full history — every measurement and every trap that cost
-real time — in [`Docs/findings.txt`](Docs/findings.txt).
+real time — in [`Docs/findings.md`](Docs/findings.md).
 
 ## Why it exists
 

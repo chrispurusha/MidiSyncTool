@@ -10,7 +10,7 @@ GenBridge spent a session on a run of defects (its findings, 2026-09-08, entries
 gets the conclusion of checking each class against THIS code rather than the reassurance of assuming
 they are the same project.
 
-TWO APPLY, and both are in todo.txt:
+TWO APPLY, and both are in todo.md:
 
   The destination table is rebuilt IN PLACE - gCount = 0, then milliseconds inside CoreMIDI. Narrower
   exposure than GenBridge's, which did it once a second from a repaint: this runs once per instance
@@ -588,7 +588,7 @@ fire ON DISCONTINUITY, not on a timer, before that question can be answered.
 ------------------------------------------------------------------------------
 mstDriver paced its blocks with usleep against an absolute deadline. That fixed the 20% drag but
 not the per-block scatter, and the scatter went straight into blockHostTime, from which every tick
-is stamped. The suspicion was recorded in to-test.txt as "probably mostly harness". It was all of it.
+is stamped. The suspicion was recorded in to-test.md as "probably mostly harness". It was all of it.
 
 The same plug-in, same IAC destination, same 130 BPM, same 24 PPQN, differing only in what paced
 the blocks:
@@ -792,7 +792,7 @@ view created", "controller: status slot 0".
 
 Building the panel needed freetype, which was not built in this project's own SynthLib checkout -
 the nested ThirdParty submodules had never been initialised here. Recipe unchanged, in
-G2-Edit/Docs/Third Party build notes.txt.
+G2-Edit/Docs/Third Party build notes.md.
 
 2026-09-02  THE PANEL'S CONTROLS, and why the environment variables had to go
 ------------------------------------------------------------------------------

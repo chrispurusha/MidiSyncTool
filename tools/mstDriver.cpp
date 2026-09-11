@@ -8,7 +8,7 @@
 // A HOST THAT LIES THE WAY ABLETON LIES.
 //
 // The point of this is not to be a correct VST3 host. It is to hand the plug-in a ProcessContext
-// that behaves the way Live 12.4.5 was MEASURED to behave on 2026-09-02 (see Docs/findings.txt),
+// that behaves the way Live 12.4.5 was MEASURED to behave on 2026-09-02 (see Docs/findings.md),
 // including the parts that are arguably wrong, so that clock generation can be developed and
 // regression-tested without a DAW and without CT sitting in front of one.
 //
@@ -108,7 +108,7 @@ static void clock_listener(const MIDIPacketList * list, void * a, void * b) {
             // The WALL CLOCK on arrival, never the packet's own stamp - a virtual port passes the
             // sender's through untouched, and reading it back measures nothing but CoreMIDI's
             // ability to copy a number. That mistake produced a flattering "0.0000 ms RMS" once
-            // already; see Docs/findings.txt.
+            // already; see Docs/findings.md.
             Byte b = packet->data[j];
 
             // A note-on, which only the probe sends. Its echo is scheduled from the moment it
