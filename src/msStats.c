@@ -4,6 +4,7 @@
  * Copyright (C) 2026 Chris Turner <chris_purusha@icloud.com>
  * Licensed under the GNU General Public License v3 - see LICENSE.
  */
+// Notes: Docs/code-notes/msStats.c.md - "// notes §k" refers there.
 
 #include <CoreAudio/HostTime.h>
 #include <math.h>
@@ -14,16 +15,7 @@
 #include "msClock.h"    // MS_PPQN - the ticks are the measure of musical time here
 #include "msStats.h"
 
-// THE THREADING SHAPE, which is GenBridge's and is deliberate.
-//
-// Everything the audio thread needs to accumulate lives in plain, non-atomic fields that ONLY the
-// audio thread touches. Once a block it copies the derived figures into atomics that the UI reads.
-// The UI therefore never contends with the audio thread for a lock it must not wait on, and the
-// audio thread never pays for an atomic per tick.
-//
-// The snapshot is not a consistent set - the UI can read a mean from one block and a worst case
-// from the next. For a display refreshed 30 times a second that is invisible and it costs nothing;
-// a seqlock here would buy correctness nobody could observe.
+// notes §1
 struct tMsStats {
     // Audio thread only.
     double   sumMargin;
@@ -121,12 +113,7 @@ void ms_stats_reset(tMsStats * stats) {
     stats->historyWrite   = 0;
     memset(stats->history, 0, sizeof(stats->history));
 
-    // THE BLOCK SIZE FIELDS ARE PART OF THE RESET TOO, and leaving them out was a bug rather than a
-    // decision: the atomics below were being published as zero while the working fields kept their
-    // old values, so the panel showed a cleared range and the very next block put the stale one
-    // straight back. Every other figure here describes the run since the reset and these must as
-    // well - not least so that a host whose buffer size is changed between runs stops reporting a
-    // range it no longer uses.
+    // notes §2
     stats->prevFrames     = 0;
     stats->framesMin      = 0;
     stats->framesMax      = 0;
@@ -190,13 +177,7 @@ void ms_stats_tick(tMsStats * stats, uint64_t stampedHostTime, uint64_t submitte
     stats->historyWrite                 = (stats->historyWrite + 1) % MS_STATS_HISTORY;
 }
 
-// THE SLIDING WINDOW BEHIND THE RECENT BLOCK-JITTER RMS - see MS_STATS_WINDOW_SECONDS in the header
-// for why the panel's figure forgets and the worst case does not.
-//
-// Kept as a running sum with each leaving sample subtracted, which is O(1) per block. A running sum
-// drifts, so it is recomputed exactly once every MS_STATS_WINDOW_MAX pushes: one pass over at most
-// 8192 doubles, tens of seconds apart, which is nothing beside the arithmetic it keeps honest over a
-// session hours long.
+// notes §3
 static int window_tail(const tMsStats * stats) {
     return ((stats->windowHead - stats->windowCount) + (2 * MS_STATS_WINDOW_MAX)) % MS_STATS_WINDOW_MAX;
 }
@@ -211,10 +192,7 @@ static void window_drop_oldest(tMsStats * stats) {
 static void window_add(tMsStats * stats, double errMs, uint64_t when) {
     double sq = errMs * errMs;
 
-    // A FULL RING OVERWRITES ITS OWN OLDEST ENTRY, so that entry has to leave the sum before it is
-    // lost. Saturating means the host's buffer is small enough that MS_STATS_WINDOW_SECONDS does not
-    // fit in the ring; the published span then reads shorter than the target, which is the truth and
-    // is why it is published at all.
+    // notes §4
     if (stats->windowCount == MS_STATS_WINDOW_MAX) {
         window_drop_oldest(stats);
     }
@@ -263,21 +241,11 @@ void ms_stats_block(tMsStats * stats,
     }
     double nominalMs = ((double)blockFrames / sampleRate) * 1000.0;
 
-    // AGAINST THE PREVIOUS BLOCK'S DURATION, NOT THIS ONE'S. The wall time between callback n-1 and
-    // callback n is the time the device took to consume block n-1's samples, so block n-1 is what it
-    // has to be judged against.
-    //
-    // With a fixed block size the two are identical and the error is invisible - which is exactly
-    // why it survived every offline run. A host that VARIES the block size, as Live does, then has
-    // every size change reported as a timing error: a 256-frame change at 48 kHz is 5.33 ms, and it
-    // turned up as a 5.209 ms worst case in Live with the clock itself perfectly steady.
+    // notes §5
     if (stats->havePrevBlock && (blockHostTime > stats->prevBlockTime)) {
         double errMs = host_to_ms(blockHostTime - stats->prevBlockTime) - stats->prevNominalMs;
 
-        // A GAP IS NOT A LATE BLOCK. ms_stats_gap() covers the suspensions the host announces; this
-        // covers the ones it does not, and backgrounding is the case in point - the process simply
-        // stops being scheduled, with no setProcessing(false) to say so. Counted, never summed: one
-        // of these is worth more than the whole rest of the session put together.
+        // notes §6
         if (fabs(errMs) > MS_STATS_GAP_MS) {
             stats->gapCount++;
         } else {
@@ -310,17 +278,7 @@ void ms_stats_block(tMsStats * stats,
     stats->prevBlockTime = blockHostTime;
     stats->havePrevBlock = true;
 
-    // DRIFT IS ONLY MEANINGFUL WHILE PLAYING, and only from an anchor taken while playing. Measuring
-    // across a stop would count the stopped wall time against no musical time at all and report an
-    // enormous fictional drift.
-    // WHETHER THE ANCHOR WAS ALREADY SET WHEN THIS BLOCK ARRIVED, which decides whether this block's
-    // frames belong inside the window. They do not: the anchor's wall time is taken at the START of
-    // this block, so counting the frames it goes on to deliver puts one whole block of audio time
-    // against no wall time at all.
-    //
-    // It showed as a drift figure decaying like 1/t - 158 ppm at 30 seconds, 138 at 34 - which is
-    // the signature of a fixed offset being amortised rather than of any real drift. One 256-frame
-    // block is 5.33 ms, and 5.33 ms over 30 s is 178 ppm.
+    // notes §7
     bool   hadAnchor     = stats->havePlayAnchor;
 
     if (!playing) {
@@ -335,17 +293,7 @@ void ms_stats_block(tMsStats * stats,
     double driftPpm      = 0.0;
     double measuredBpm   = 0.0;
 
-    // COUNTED IN FRAMES, NOT IN TICKS.
-    //
-    // Ticks are integers arriving about every 19 ms, so over a short window the quantisation alone
-    // dominates: one tick either way across five seconds is some 3800 ppm, and the figure jumped
-    // about far too much to read. Frames are the audio clock itself and have no such step.
-    //
-    // WHAT IT NOW MEANS, precisely: the host's audio clock against the system clock. The blocks
-    // arrive at the interface's sample rate while the timestamps this plug-in hands CoreMIDI are
-    // mach time, so this is exactly the quantity that decides whether a generated clock stays with
-    // the music over a long session. It is normally tens of ppm - GenBridge measures the same
-    // quantity between two devices and steers a ring on it.
+    // notes §8
     if (hadAnchor && stats->havePlayAnchor) {
         stats->audioSeconds += ((double)blockFrames / sampleRate);
     }
@@ -375,10 +323,7 @@ void ms_stats_block(tMsStats * stats,
     atomic_store(&stats->pubPeriodRms,
                  (stats->blockCount > 0) ? sqrt(stats->sumPeriodErrSq / (double)stats->blockCount) : 0.0);
 
-    // THE WINDOW'S SPAN IS MEASURED, NOT ASSUMED. It is shorter than MS_STATS_WINDOW_SECONDS while
-    // the window fills, shorter again if the ring saturated, and shorter than the wall time it
-    // covers if a suspension took samples out of it - and every one of those is worth seeing, so
-    // the figure comes from the entries themselves rather than from a block count and a rate.
+    // notes §9
     double recentSeconds = 0.0;
 
     if (stats->windowCount > 1) {

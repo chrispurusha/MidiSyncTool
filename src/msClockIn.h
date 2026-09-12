@@ -4,6 +4,7 @@
  * Copyright (C) 2026 Chris Turner <chris_purusha@icloud.com>
  * Licensed under the GNU General Public License v3 - see LICENSE.
  */
+// Notes: Docs/code-notes/msClockIn.h.md - "// notes §k" refers there.
 
 #ifndef __MS_CLOCK_IN_H__
 #define __MS_CLOCK_IN_H__
@@ -15,22 +16,7 @@
 extern "C" {
 #endif
 
-// MEASURE ONLY. Nothing here steers the generated clock, and that separation is deliberate: the
-// first useful thing to do with a clock input is to say what it is doing, and the second - a PLL
-// that regenerates from it - is a different feature that should not be built on an estimator nobody
-// has read the numbers out of yet.
-//
-// WHAT IT IS ACTUALLY FOR, beyond a tempo readout. The standing question this project has never
-// been able to answer defensibly is "how much better is our clock than Live's own?" - because the
-// only reference so far has been a drum machine's audio onsets, which carry the device, the desk
-// and the A/D on top of anything the wire did. Point Live's Sync at IAC, point this at the same
-// port, and both clocks can be timed against the SAME reference by the same code. The wire measures
-// at about 0.013 ms here; the audio path at 0.132 ms at best. It is an order of magnitude sharper.
-//
-// THREAD OWNERSHIP: everything in here belongs to the CoreMIDI receive thread and to nothing else.
-// The estimator's window is touched by that thread alone and published as atomics; the audio thread
-// never reads it and the UI only reads the published snapshot. One owning thread per piece of
-// state, everyone else posts.
+// notes §1
 
 // HOW MANY ARRIVALS THE FIT SPANS. At 24 PPQN and 120 BPM, 192 clocks is eight beats - four
 // seconds. Long enough that the ppm figure means something (a one-sample error over four seconds is
@@ -41,10 +27,7 @@ extern "C" {
 // rather than the clock.
 #define MS_CLOCK_IN_MIN_FIT    (16)
 
-// AN INTERVAL THIS MANY TIMES THE EXPECTED ONE IS NOT A CLOCK PERIOD. The master stopped, was
-// switched, or the port dropped out - and one of those intervals in a least-squares window drags
-// the fitted rate somewhere meaningless. Counted and the window restarted, never averaged in. Same
-// discipline, and the same reasoning, as MS_STATS_GAP_MS.
+// notes §2
 #define MS_CLOCK_IN_GAP_RATIO    (4.0)
 
 typedef struct {
