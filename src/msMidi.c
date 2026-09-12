@@ -12,7 +12,7 @@
 #include <stdatomic.h>
 #include <string.h>
 
-#include "msLog.h"
+#include "synthlibLog.h"
 #include "msMidi.h"
 
 static MIDIClientRef           gClient       = 0;
@@ -84,12 +84,12 @@ static void ensure_client(void) {
     // without one simply gets no notifications and behaves as it did before - which is why the
     // first enumeration still happens explicitly at load.
     if (MIDIClientCreate(CFSTR("MidiSyncTool"), midi_notify, NULL, &gClient) != noErr) {
-        ms_log_line("MIDI: MIDIClientCreate failed");
+        synthlib_log_line("MIDI: MIDIClientCreate failed");
         return;
     }
 
     if (MIDIOutputPortCreate(gClient, CFSTR("MidiSyncTool Out"), &gOutPort) != noErr) {
-        ms_log_line("MIDI: MIDIOutputPortCreate failed");
+        synthlib_log_line("MIDI: MIDIOutputPortCreate failed");
         return;
     }
     gReady = true;
@@ -161,12 +161,12 @@ static void refresh_sources_locked(void) {
     // master is not there any more" - two identical-looking silences. Nothing is repaired here: the
     // endpoint is what the connection is to, and ms_midi_listening() reports the absence by itself.
     if ((atomic_load(&gListeningEnd) != 0) && (ms_midi_listening() < 0)) {
-        ms_log_line("MIDI: the source being listened to has gone away");
+        synthlib_log_line("MIDI: the source being listened to has gone away");
     }
-    ms_log_line("MIDI: %d source(s)", found);
+    synthlib_log_line("MIDI: %d source(s)", found);
 
     for (int i = 0; i < found; i++) {
-        ms_log_line("MIDI:   <%d> %s", i, gSourceName[i]);
+        synthlib_log_line("MIDI:   <%d> %s", i, gSourceName[i]);
     }
 }
 
@@ -208,10 +208,10 @@ void ms_midi_refresh(void) {
 
     refresh_sources_locked();
 
-    ms_log_line("MIDI: %d destination(s)", found);
+    synthlib_log_line("MIDI: %d destination(s)", found);
 
     for (int i = 0; i < found; i++) {
-        ms_log_line("MIDI:   [%d] %s", i, gName[i]);
+        synthlib_log_line("MIDI:   [%d] %s", i, gName[i]);
     }
 
     pthread_mutex_unlock(&gRefreshLock);
@@ -336,7 +336,7 @@ bool ms_midi_listen(int index) {
 
     if (  (gInPort == 0)
        && (MIDIInputPortCreate(gClient, CFSTR("MidiSyncTool In"), read_proc, NULL, &gInPort) != noErr)) {
-        ms_log_line("MIDI: MIDIInputPortCreate failed");
+        synthlib_log_line("MIDI: MIDIInputPortCreate failed");
         return false;
     }
     // DISCONNECT FIRST, ALWAYS. Two sources connected to one port interleave into a single stream
@@ -353,7 +353,7 @@ bool ms_midi_listen(int index) {
     int             count    = atomic_load_explicit(&gSourceCount, memory_order_acquire);
 
     if ((index < 0) || (index >= count)) {
-        ms_log_line("MIDI: listening to nothing");
+        synthlib_log_line("MIDI: listening to nothing");
         return true;
     }
     // READ ONCE. A rebuild on another thread can move this slot, and connecting to one endpoint
@@ -361,11 +361,11 @@ bool ms_midi_listen(int index) {
     MIDIEndpointRef endpoint = gSource[index];
 
     if (MIDIPortConnectSource(gInPort, endpoint, NULL) != noErr) {
-        ms_log_line("MIDI: could not connect to source <%d> %s", index, gSourceName[index]);
+        synthlib_log_line("MIDI: could not connect to source <%d> %s", index, gSourceName[index]);
         return false;
     }
     atomic_store(&gListeningEnd, endpoint);
-    ms_log_line("MIDI: listening to <%d> %s", index, gSourceName[index]);
+    synthlib_log_line("MIDI: listening to <%d> %s", index, gSourceName[index]);
     return true;
 }
 

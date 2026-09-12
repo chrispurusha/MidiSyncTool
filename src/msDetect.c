@@ -13,7 +13,7 @@
 #include <string.h>
 
 #include "msDetect.h"
-#include "msLog.h"
+#include "synthlibLog.h"
 
 // HOW LONG A SCHEDULED EVENT WAITS FOR ITS TRANSIENT before it is written off. Generous, because a
 // device that is genuinely 150 ms late is a finding rather than a miss, and because a miss and a
@@ -317,7 +317,7 @@ static void monitor_fit(tMsDetect * detect) {
                 at += snprintf(line + at, sizeof(line) - (size_t)at, "%.4f ", phase);
             }
 
-            ms_log_line("  shape  | %d hits per %.3f ms cycle, at phases: %s",
+            synthlib_log_line("  shape  | %d hits per %.3f ms cycle, at phases: %s",
                         repeat, cycleMs, line);
         }
     }
@@ -616,7 +616,7 @@ void ms_detect_audio(tMsDetect *   detect,
             // onset is what tells the two apart. Guessing between them by adjusting the refractory
             // until the count looks tidy would be fitting the instrument to the answer.
             detect->spurious++;
-            ms_log_line("  detector: spurious onset, %.1f ms after the previous", sinceLastMs);
+            synthlib_log_line("  detector: spurious onset, %.1f ms after the previous", sinceLastMs);
             continue;
         }
         slot->used            = true;

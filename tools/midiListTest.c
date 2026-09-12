@@ -7,8 +7,8 @@
 // change on purpose, by creating and disposing VIRTUAL endpoints in this process. That is a real
 // kMIDIMsgSetupChanged, indistinguishable from a synth being switched on, and it needs no hardware.
 //
-//     clang -O0 -g -std=gnu11 -Wall -Wextra -I ../src -o midiListTest \
-//         midiListTest.c ../src/msMidi.c ../src/msLog.c \
+//     clang -O0 -g -std=gnu11 -Wall -Wextra -I ../src -I ../SynthLib/plugin -o midiListTest \
+//         midiListTest.c ../src/msMidi.c ../SynthLib/plugin/synthlibLog.c \
 //         -framework CoreMIDI -framework CoreAudio -framework CoreFoundation
 //
 // Every line prints what it expects beside what it got. The run loop is spun for a second after each
@@ -20,6 +20,9 @@
 #include <string.h>
 
 #include "msMidi.h"
+
+// Names the log - touch /tmp/midisynctool-log, read /tmp/midisynctool.log. See SynthLib's plugin/synthlibLog.h.
+const char gSynthLibLogName[] = "midisynctool";
 
 static int gFailures = 0;
 

@@ -34,7 +34,7 @@ tick.
 |---|---|---|
 | VST3 skeleton | `vst3/gbVst3.cpp` | two-class factory, `IPluginFactory2`, IConnectionPoint message channel, parameter plumbing with begin/perform/endEdit |
 | MIDI destination selection | `vst3/gbMidi.c/.h` | enumeration, names, slot-for-name — exactly "select the MIDI output port" |
-| Editor | `vst3/gbDraw.c`, `gbView.m`, `gbEditor.mm` | Metal view drawing through SynthLib, drop-down rows, scrolling menus |
+| Editor | `vst3/gbDraw.c` (the view and window are SynthLib's since 2026-09-11: `synthlibPanelView.m`, `synthlibPluginVst3View.mm`) | Metal view drawing through SynthLib, drop-down rows, scrolling menus |
 | Telemetry block | `vst3/gbStatus.h` | lock-free processor → editor status, which is what every readout in the concept's UI needs |
 | Latency measurement | the `measure*` machine in `gbVst3.cpp` | **the big one — see below** |
 | Harnesses | `tools/vst3check`, `tools/vst3host` | including `--audio N`, `--click X,Y`, and the poll-until-open discipline |

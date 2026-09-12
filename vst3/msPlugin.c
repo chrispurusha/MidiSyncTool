@@ -46,12 +46,15 @@
 #include "msClockIn.h"
 #include "msDetect.h"
 #include "msDraw.h"
-#include "msLog.h"
+#include "synthlibLog.h"
 #include "msMidi.h"
 #include "msProbe.h"
 #include "msStats.h"
 #include "msStatus.h"
-#include "msView.h"
+#include "synthlibPanelView.h"
+
+// Names the log - touch /tmp/midisynctool-log, read /tmp/midisynctool.log. See SynthLib's plugin/synthlibLog.h.
+const char gSynthLibLogName[] = "midisynctool";
 
 #ifndef MST_VERSION_STRING
 #define MST_VERSION_STRING    "0.1.0"
@@ -307,7 +310,7 @@ static void apply_parameter(tMsPlugin * m, int id, double normalized) {
             atomic_store(&m->status->mode, (int)m->mode);
             atomic_store(&m->status->haveDestination, (m->clock.destination >= 0) ? 1 : 0);
         }
-        ms_log_line("mode -> %s", ms_mode_label(m->mode));
+        synthlib_log_line("mode -> %s", ms_mode_label(m->mode));
     } else if (id == kParamMidiDest) {
         int slot = mst_dest_slot(normalized);
 
@@ -324,7 +327,7 @@ static void apply_parameter(tMsPlugin * m, int id, double normalized) {
                 atomic_store(&m->status->haveDestination, 0);
             }
         }
-        ms_log_line("destination parameter -> slot %d (%s)", slot,
+        synthlib_log_line("destination parameter -> slot %d (%s)", slot,
                     ((m->clock.destination >= 0) && (m->status != NULL)) ? m->status->destName : "none");
     } else if (id == kParamClockSource) {
         int slot = mst_source_slot(normalized);
@@ -380,7 +383,7 @@ static void ms_destroy(void * inst) {
 static void ms_initialize(void * inst) {
     tMsPlugin * m = (tMsPlugin *)inst;
 
-    ms_log_line("initialize - MidiSyncTool %s", MST_VERSION_STRING);
+    synthlib_log_line("initialize - MidiSyncTool %s", MST_VERSION_STRING);
 
     atomic_store(&m->statusSlot, ms_status_claim());
     m->status = ms_status(atomic_load(&m->statusSlot));
@@ -405,7 +408,7 @@ static void ms_initialize(void * inst) {
     if (division != NULL) {
         ms_detect_set_division(m->detect, atoi(division));
     }
-    ms_log_line("detector: expecting a transient every %d ticks", ms_detect_division(m->detect));
+    synthlib_log_line("detector: expecting a transient every %d ticks", ms_detect_division(m->detect));
 
     ms_probe_init(&m->probe);
 
@@ -416,13 +419,13 @@ static void ms_initialize(void * inst) {
 
     if (compensate != NULL) {
         ms_clock_set_compensation_ms(&m->clock, atof(compensate));
-        ms_log_line("clock compensation: %.3f ms of device latency, advanced in phase", atof(compensate));
+        synthlib_log_line("clock compensation: %.3f ms of device latency, advanced in phase", atof(compensate));
     }
     const char * offset = getenv("MST_OFFSET_MS");
 
     if (offset != NULL) {
         ms_midi_set_offset_ms(atof(offset));
-        ms_log_line("output offset: %+.3f ms (wall clock trim)", ms_midi_offset_ms());
+        synthlib_log_line("output offset: %+.3f ms (wall clock trim)", ms_midi_offset_ms());
     }
 
     // ENUMERATED HERE, not from the audio thread and not from a repaint: it takes CoreMIDI's locks.
@@ -436,9 +439,9 @@ static void ms_initialize(void * inst) {
         set_selected_port(m, ms_midi_index_for_name(wanted));
 
         if (m->clock.destination < 0) {
-            ms_log_line("MST_MIDI_DEST '%s' is not present - generating nothing", wanted);
+            synthlib_log_line("MST_MIDI_DEST '%s' is not present - generating nothing", wanted);
         } else {
-            ms_log_line("clock destination: [%d] %s", m->clock.destination, wanted);
+            synthlib_log_line("clock destination: [%d] %s", m->clock.destination, wanted);
         }
 
         // The probe drives the same device - set_selected_port() does both.
@@ -472,7 +475,7 @@ static void ms_initialize(void * inst) {
 static void ms_terminate(void * inst) {
     tMsPlugin * m = (tMsPlugin *)inst;
 
-    ms_log_line("terminate");
+    synthlib_log_line("terminate");
     ms_status_release(atomic_load(&m->statusSlot));
     atomic_store(&m->statusSlot, -1);
     m->status = NULL;
@@ -499,14 +502,14 @@ static void ms_prepare(void * inst, const tSynthLibSetup * setup) {
 
     m->sampleRate = setup->sampleRate;
     m->maxBlock   = setup->maxFrames;
-    ms_log_line("setupProcessing: rate %.0f, maxBlock %d, mode %s", setup->sampleRate,
+    synthlib_log_line("setupProcessing: rate %.0f, maxBlock %d, mode %s", setup->sampleRate,
                 (int)setup->maxFrames, setup->offline ? "offline" : "realtime");
 }
 
 static void ms_set_active(void * inst, bool active) {
     tMsPlugin * m = (tMsPlugin *)inst;
 
-    ms_log_line("setActive(%d)", active ? 1 : 0);
+    synthlib_log_line("setActive(%d)", active ? 1 : 0);
     m->blocksSeen = 0;
     m->lastLogged = -1.0;
     ms_suspend(m);
@@ -517,7 +520,7 @@ static void ms_set_active(void * inst, bool active) {
 static void ms_set_processing(void * inst, bool running) {
     tMsPlugin * m = (tMsPlugin *)inst;
 
-    ms_log_line("setProcessing(%d)", running ? 1 : 0);
+    synthlib_log_line("setProcessing(%d)", running ? 1 : 0);
     ms_suspend(m);
 }
 
@@ -654,7 +657,7 @@ static void log_heartbeat(tMsPlugin * m, const tSynthLibTransport * t, uint32_t 
              t->barPositionValid ? "bar " : "", t->timeSigValid ? "timeSig " : "",
              t->systemTimeValid ? "sysTime " : "");
 
-    ms_log_line("blk %-6llu n=%-5d | %.4f BPM | %d/%d | ppq %.4f bar %.4f | smp %lld cont %lld"
+    synthlib_log_line("blk %-6llu n=%-5d | %.4f BPM | %d/%d | ppq %.4f bar %.4f | smp %lld cont %lld"
                 " | sysTime %lld | wall +%.2f ms | ticks %llu wraps %llu | %s",
                 (unsigned long long)m->blocksSeen, (int)frames, t->tempo,
                 (int)t->timeSigNumerator, (int)t->timeSigDenominator,
@@ -667,7 +670,7 @@ static void log_heartbeat(tMsPlugin * m, const tSynthLibTransport * t, uint32_t 
     // silently: it is the host's own behaviour, and the count is the only way to know the correction
     // is firing on real ones rather than on ordinary blocks.
     if (m->splitCalls > 0) {
-        ms_log_line("  blocks | %llu split call(s): the host handed one device cycle over in"
+        synthlib_log_line("  blocks | %llu split call(s): the host handed one device cycle over in"
                     " more than one process() call - cycle %u frames, this call %d",
                     (unsigned long long)m->splitCalls,
                     (m->cycleFramesLast > 0) ? m->cycleFramesLast : (unsigned)frames, (int)frames);
@@ -680,7 +683,7 @@ static void log_heartbeat(tMsPlugin * m, const tSynthLibTransport * t, uint32_t 
         // NO LATENCY LINE IN MONITOR MODE. There is no reference for a transient to be late against,
         // so the only honest figures are the fitted grid and the spread about it.
         if (hit.monitorOnsets > 0) {
-            ms_log_line("  monitor| grid %.3f ms (%.3f BPM) | jitter RMS %.3f peak dev %.3f ms"
+            synthlib_log_line("  monitor| grid %.3f ms (%.3f BPM) | jitter RMS %.3f peak dev %.3f ms"
                         " | %llu onset(s), %llu empty slot(s) | input peak %.4f",
                         hit.monitorPeriodMs, hit.monitorBpm, hit.jitterRmsMs, hit.peakDeviationMs,
                         (unsigned long long)hit.monitorOnsets, (unsigned long long)hit.missed,
@@ -692,7 +695,7 @@ static void log_heartbeat(tMsPlugin * m, const tSynthLibTransport * t, uint32_t 
     } else if ((hit.hits > 0) || (hit.missed > 0) || (hit.spurious > 0)) {
         // ROUND TRIP, and labelled as such - it still contains the interface's A/D and the host's
         // input buffering. See the note at the top of msDetect.h.
-        ms_log_line("  device | round trip mean %.3f last %.3f min %.3f max %.3f ms"
+        synthlib_log_line("  device | round trip mean %.3f last %.3f min %.3f max %.3f ms"
                     " | jitter RMS %.3f peak dev %.3f ms | hits %llu missed %llu spurious %llu"
                     " | input peak %.4f",
                     hit.latencyMeanMs, hit.latencyLastMs, hit.latencyMinMs, hit.latencyMaxMs,
@@ -710,7 +713,7 @@ static void log_heartbeat(tMsPlugin * m, const tSynthLibTransport * t, uint32_t 
     if (snap.windowSeconds <= 0.0) {
         return;
     }
-    ms_log_line("  timing | commit margin mean %+.3f min %+.3f RMS %.3f ms | late %llu/%llu"
+    synthlib_log_line("  timing | commit margin mean %+.3f min %+.3f RMS %.3f ms | late %llu/%llu"
                 " | block period RMS %.3f all-time / %.3f over %.1f s, worst %+.3f ms"
                 " | %llu gap(s) | drift %+.1f ppm | BPM host %.4f measured %.4f over %.1f s",
                 snap.marginMeanMs, snap.marginMinMs, snap.marginRmsMs,
@@ -723,7 +726,7 @@ static void log_heartbeat(tMsPlugin * m, const tSynthLibTransport * t, uint32_t 
     // THE PAIR, AND THE RESYNC COUNT, ON ONE LINE. A residual on its own says nothing: it can look
     // excellent purely because the model keeps re-anchoring. THE ALL-TIME RMS IS THE RIGHT DENOMINATOR
     // here, and deliberately not the windowed one the panel shows - see msStats.h.
-    ms_log_line("  model  | block jitter raw %.3f ms all-time -> residual %.3f ms RMS"
+    synthlib_log_line("  model  | block jitter raw %.3f ms all-time -> residual %.3f ms RMS"
                 " (%.1f %% of raw) worst %.3f ms | %llu resync(s) over %llu blocks",
                 snap.blockPeriodRmsMs, ms_clock_residual_ms(&m->clock),
                 (snap.blockPeriodRmsMs > 0.0)
@@ -738,7 +741,7 @@ static void log_heartbeat(tMsPlugin * m, const tSynthLibTransport * t, uint32_t 
     ms_clock_in_read(m->clockIn, &in);
 
     if (ms_midi_listening() >= 0) {
-        ms_log_line("  clk in | %.4f BPM (%.4f ms/clock) | jitter RMS %.4f peak dev %.4f ms"
+        synthlib_log_line("  clk in | %.4f BPM (%.4f ms/clock) | jitter RMS %.4f peak dev %.4f ms"
                     " | %u fitted | %s | %llu clock(s) %llu gap(s) | vs host %+.1f ppm",
                     in.bpm, in.periodMs, in.jitterRmsMs, in.peakDevMs, in.fitted,
                     in.running ? "RUNNING" : "stopped",
@@ -749,7 +752,7 @@ static void log_heartbeat(tMsPlugin * m, const tSynthLibTransport * t, uint32_t 
     // THE BLOCK SIZE, reported whenever the host is not handing over a constant one. Every per-block
     // figure above assumes it is, and Live does not.
     if (snap.blockFramesMin != snap.blockFramesMax) {
-        ms_log_line("  blocks | host block size VARIES: %u..%u frames, %llu change(s)"
+        synthlib_log_line("  blocks | host block size VARIES: %u..%u frames, %llu change(s)"
                     " over %llu blocks - per-block figures are judged against the"
                     " previous block's duration accordingly",
                     snap.blockFramesMin, snap.blockFramesMax,
@@ -784,7 +787,7 @@ static void ms_process(void * inst, const float * const * in, uint32_t numIn, fl
         // that installed no HostCallbacks is exactly this.
         if (!m->warnedNoContext) {
             m->warnedNoContext = true;
-            ms_log_line("WARNING: the host gives no transport - no timing at all");
+            synthlib_log_line("WARNING: the host gives no transport - no timing at all");
         }
         return;
     }
@@ -846,7 +849,7 @@ static void ms_process(void * inst, const float * const * in, uint32_t numIn, fl
     if ((m->status != NULL) && (atomic_exchange(&m->status->clearRequest, 0u) != 0u)) {
         ms_stats_reset(m->stats);
         ms_clock_reset_stats(&m->clock);
-        ms_log_line("figures cleared from the panel");
+        synthlib_log_line("figures cleared from the panel");
     }
     double tempo = t->tempoValid ? t->tempo : 0.0;
 
@@ -895,7 +898,7 @@ static void ms_process(void * inst, const float * const * in, uint32_t numIn, fl
                          && (fabs(t->projectTimeMusic - expectedPpq) > 1.0e-6);
 
     if (jumped) {
-        ms_log_line("JUMP  ppq %.6f -> %.6f (expected %.6f, delta %+.6f) | smp %lld | bar %.4f",
+        synthlib_log_line("JUMP  ppq %.6f -> %.6f (expected %.6f, delta %+.6f) | smp %lld | bar %.4f",
                     m->lastPpq, t->projectTimeMusic, expectedPpq, t->projectTimeMusic - expectedPpq,
                     (long long)t->projectTimeSamples, t->barPositionMusic);
     }
@@ -1071,7 +1074,7 @@ static void ms_set_state(void * inst, const void * data, size_t len) {
                 atomic_store(&m->status->waitingForDevice, 1);
                 atomic_store(&m->status->haveDestination, 0);
             }
-            ms_log_line("saved destination '%s' is not present - generating nothing", name);
+            synthlib_log_line("saved destination '%s' is not present - generating nothing", name);
         }
     }
 
@@ -1089,7 +1092,7 @@ static void ms_set_state(void * inst, const void * data, size_t len) {
         synthlib_plugin_param_edited(m, kParamClockSource, resolved);
 
         if (index < 0) {
-            ms_log_line("saved clock source '%s' is not present - measuring nothing", name);
+            synthlib_log_line("saved clock source '%s' is not present - measuring nothing", name);
         }
     }
 }
@@ -1160,27 +1163,55 @@ static void ms_on_edit(void * user, const tMsEditRequest * request) {
     synthlib_plugin_param_edited(m, id, request->normalized);
 }
 
-// EVERY FRAME, this editor's instance's status slot and the values the HOST believes - which on VST3
-// is the controller's copy, the one the host's own panel shows.
-static void ms_on_sync(void * user, void * view) {
+// THE PANEL: SynthLib's shared view (synthlibPanelView.m) drawing msDraw.c. What follows is all that
+// is MidiSyncTool's about it - which draw calls, and what "this editor's state" means.
+//
+// EVERY FRAME AND EVERY CLICK, this editor's instance's status slot and the values the HOST believes -
+// which on VST3 is the controller's copy, the one the host's own panel shows. The draw layer keeps
+// both file-scope, so with two editors open whichever pushed last would otherwise speak for both.
+static void ms_sync(void * user) {
     tMsPlugin * m = (tMsPlugin *)user;
 
-    ms_view_set_status_slot(view, (m != NULL) ? atomic_load(&m->statusSlot) : -1);
+    ms_draw_set_status_slot((m != NULL) ? atomic_load(&m->statusSlot) : -1);
 
     if (m == NULL) {
         return;
     }
-    ms_view_set_values(view,
-                       synthlib_plugin_param_value(m, kParamMidiDest),
+    ms_draw_set_values(synthlib_plugin_param_value(m, kParamMidiDest),
                        synthlib_plugin_param_value(m, kParamAudioSource),
                        synthlib_plugin_param_value(m, kParamCompensate),
                        synthlib_plugin_param_value(m, kParamMode),
                        synthlib_plugin_param_value(m, kParamClockSource));
 }
 
+static void ms_panel_frame(void * user, int pixelWidth, int pixelHeight) {
+    (void)user;
+    ms_draw_frame(pixelWidth, pixelHeight);
+}
+
+static bool ms_panel_click(void * user, double x, double y) {
+    tMsEditRequest request;
+
+    if (ms_draw_click(x, y, &request) == false) {
+        return false;
+    }
+    ms_on_edit(user, &request);
+    return true;
+}
+
+static const tSynthLibPanel gPanel = {
+    .canvasWidth = MS_CANVAS_W,
+    .init        = ms_draw_init,
+    .sync        = ms_sync,
+    .frame       = ms_panel_frame,
+    .click       = ms_panel_click,
+    .pointer     = ms_draw_set_mouse,
+    .menuActive  = ms_draw_menu_active,
+};
+
 static void * ms_create_view(const tSynthLibPluginDesc * desc, void * inst, double width, double height) {
     (void)desc;
-    return ms_view_create(width, height, ms_on_edit, ms_on_sync, inst);
+    return synthlib_panel_view_create(&gPanel, inst, width, height);
 }
 
 // THE MACHINE'S REMEMBERED WIDTH, the starting point for an editor a project has never opened - a VST3

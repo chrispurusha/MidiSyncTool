@@ -3,6 +3,7 @@ MidiSyncTool TO TEST
 Finished code that is built but not yet checked against a real host.
 Confirmed -> delete the line. Check failed -> move it to todo.md.
 
+- ***THE PANEL VIEW IS SYNTHLIB'S (2026-09-11)*** - msView.m is gone; the editor is SynthLib/plugin/synthlibPanelView.m drawing msDraw.c, shared with GenBridge, with MidiSyncTool's own class name (MidiSyncToolPanelView). Checked offline: pixel-identical before and after in tools/vst3host, auval passes, and clicks land - three presses on > took compensation from 0.0 to 0.3 ms, and the Mode drop-down opens. STILL TO CHECK in Live: a live resize, and GenBridge and MidiSyncTool editors open in one set at once - each must draw and respond as itself.
 - ***VST3 AND AUDIO UNIT, ON SYNTHLIB'S SHARED WRAPPERS (2026-09-11)*** - msVst3.cpp and msEditor.mm
   are gone; vst3/msPlugin.c carries the processor's logic across unchanged and describes the plug-in
   to SynthLib/plugin/, and ./do-plugin builds MidiSyncTool.vst3 and MidiSyncTool.component (aufx MSyn

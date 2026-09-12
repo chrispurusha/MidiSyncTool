@@ -10,7 +10,7 @@
 #include <string.h>
 
 #include "msClock.h"
-#include "msLog.h"
+#include "synthlibLog.h"
 #include "msMidi.h"
 #include "msDetect.h"
 #include "msStats.h"
@@ -111,7 +111,7 @@ void ms_clock_process(tMsClock * clock,
 
             ms_midi_send_at(clock->destination, &byte, 1, blockHostTime);
             clock->stopsSent++;
-            ms_log_line("transport: STOP at ppq %.4f", ppq);
+            synthlib_log_line("transport: STOP at ppq %.4f", ppq);
         }
         // Whether clock should keep running while stopped is still an open decision (some gear
         // wants it, some only while running), so for now nothing further is sent and the position is
@@ -139,7 +139,7 @@ void ms_clock_process(tMsClock * clock,
 
             ms_midi_send_at(clock->destination, &byte, 1, blockHostTime);
             clock->startsSent++;
-            ms_log_line("transport: START at ppq %.4f", ppq);
+            synthlib_log_line("transport: START at ppq %.4f", ppq);
         } else {
             uint8_t spp[3] = {
                 MIDI_SPP,
@@ -151,7 +151,7 @@ void ms_clock_process(tMsClock * clock,
             ms_midi_send_at(clock->destination, spp, 3, blockHostTime);
             ms_midi_send_at(clock->destination, &cont, 1, blockHostTime);
             clock->continuesSent++;
-            ms_log_line("transport: SPP %d + CONTINUE at ppq %.4f", beat16, ppq);
+            synthlib_log_line("transport: SPP %d + CONTINUE at ppq %.4f", beat16, ppq);
         }
         // A RUN'S FIGURES SHOULD DESCRIBE THAT RUN. Carrying a mean across a stop mixes in whatever
         // the last take did, and the worst case would never improve however well the tool behaved

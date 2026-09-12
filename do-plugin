@@ -110,7 +110,7 @@ fi
 # ------------------------------------------------------------------------------------------------
 
 SOURCES=(
-    "$HERE/src/msLog.c"
+    "$SL/plugin/synthlibLog.c"      # the file-gated log, shared with the sibling plug-in
     "$HERE/src/msMidi.c"
     "$HERE/src/msClock.c"
     "$HERE/src/msClockIn.c"
@@ -143,7 +143,7 @@ SOURCES=(
 )
 
 OBJC_SOURCES=(
-    "$HERE/vst3/msView.m"
+    "$SL/plugin/synthlibPanelView.m"   # the panel view, shared with the other sibling since 2026-09-11
     "$SL/src/renderBackendMetal.m"
 )
 
@@ -181,7 +181,7 @@ WARNFLAGS=(-Wall -Wextra)
 
 # SYNTHLIB_PLUGIN_BUILD is SynthLib's "this is a plug-in, there is no GLFW" - G2_VST3_BUILD until the
 # plug-ins gained a second format. An ARRAY, so the version define keeps its own quotes.
-DEFS=(-DSYNTHLIB_PLUGIN_BUILD=1 -DMST_VERSION_STRING="\"$MST_VERSION\"" -DMST_AU_VERSION=$AU_VERSION)
+DEFS=(-DSYNTHLIB_PLUGIN_BUILD=1 -DMST_VERSION_STRING="\"$MST_VERSION\"" -DMST_AU_VERSION=$AU_VERSION -DSYNTHLIB_PANEL_VIEW_CLASS=MidiSyncToolPanelView)
 
 # glfw for its HEADERS ONLY - SynthLib's key and mouse constants come from them. freetype is real: the
 # panel renders text through it, taken static so each bundle stays self-contained.

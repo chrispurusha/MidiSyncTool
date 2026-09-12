@@ -9,7 +9,7 @@
 #include <string.h>
 
 #include "msClock.h"     // MS_LOOKAHEAD_MS - the probe commits as far ahead as the clock does
-#include "msLog.h"
+#include "synthlibLog.h"
 #include "msMidi.h"
 #include "msProbe.h"
 
@@ -44,7 +44,7 @@ void ms_probe_start(tMsProbe * probe, tMsDetect * detect) {
                              + AudioConvertNanosToHostTime((uint64_t)(MS_PROBE_LEAD_MS * 1.0e6));
     probe->running         = true;
 
-    ms_log_line("probe: %d notes, note %d vel %d on channel %d, every %.0f ms",
+    synthlib_log_line("probe: %d notes, note %d vel %d on channel %d, every %.0f ms",
                 probe->count, probe->note, probe->velocity, probe->channel + 1,
                 probe->intervalMs);
 }
@@ -110,7 +110,7 @@ void ms_probe_process(tMsProbe *  probe,
 
         if (probe->sent >= probe->count) {
             probe->running = false;
-            ms_log_line("probe: %d notes sent, waiting on the last transients", probe->sent);
+            synthlib_log_line("probe: %d notes sent, waiting on the last transients", probe->sent);
         }
     }
 }
