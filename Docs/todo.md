@@ -4,6 +4,10 @@ Things to do. ONE LINE PER ITEM - keep it that way.
 Measurements, reasoning and completed-work narrative go in findings.md, NOT here.
 Built-but-unchecked work goes in to-test.md.
 
+SynthLib fix to pick up (2026-10-08)
+
+- SynthLib's device.c ignored the first channel on OUTPUT (every stream landed on device channels 1-2), fixed in GenBridge's SynthLib checkout - once it is pushed, pull it here: tools/mstDriver.cpp opens its output at outFirst, so any run with outFirst > 0 until now played on 1-2, and measurements taken that way should be rechecked
+
 Open decisions (see Docs/design.md)
 
 - Does phase 1 need an audio input bus at all, or only from section 3 onward? Registering as an Fx from the start costs nothing and keeps it open
