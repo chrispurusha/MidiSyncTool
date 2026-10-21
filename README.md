@@ -1,4 +1,4 @@
-# MIDI Sync Doctor
+# MIDI Sync Tool
 
 A VST3 plug-in for generating, measuring and correcting MIDI clock and hardware timing.
 
@@ -6,6 +6,10 @@ It takes the **host's** musical timing as the reference rather than an externall
 clock, schedules a clean clock of its own to a chosen MIDI output, and measures what the hardware
 at the other end actually does with it — latency, jitter and drift — by listening to the audio
 coming back.
+
+## Working with LLMs
+
+Development started as a solo project. As the project has evolved, I've recently incorporated LLM-assisted development into the workflow, using it as a tool for research, coding, debugging, and experimentation.
 
 **Status: working, and taking real measurements.** It generates and schedules a clock, corrects for
 the host's own block jitter, and measures a device's latency and jitter from the returning audio.
