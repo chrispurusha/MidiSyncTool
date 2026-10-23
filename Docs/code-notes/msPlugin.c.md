@@ -8,7 +8,7 @@ WHAT MIDISYNCTOOL IS, AS FAR AS A PLUG-IN FORMAT NEEDS TO KNOW - and nothing abo
 
 This is what msVst3.cpp and msEditor.mm used to be, less every line that was VST3. The COM
 plumbing, the controller, the factory and the IPlugView are SynthLib's now (SynthLib/plugin/),
-shared with G2 Alike and GenBridge, and `./do-plugin` builds MidiSyncTool.vst3 and
+shared with G2Alike and GenBridge, and `./do-plugin` builds MidiSyncTool.vst3 and
 MidiSyncTool.component from the same objects.
 
 THE LOGIC MOVED ACROSS UNCHANGED. The clock, the split-block correction, the telemetry and the
