@@ -42,7 +42,6 @@
 #include "synthlibPanelView.h"
 
 // Names the log - touch /tmp/midisynctool-log, read /tmp/midisynctool.log. See SynthLib's plugin/synthlibLog.h.
-const char gSynthLibLogName[] = "midisynctool";
 
 #ifndef MST_VERSION_STRING
 #define MST_VERSION_STRING    "0.1.0"
@@ -1244,6 +1243,8 @@ static const tSynthLibPluginSet gSet = {
     .count    = 1
 };
 
-const tSynthLibPluginSet * synthlib_plugin_variants(void) {
+static const tSynthLibPluginSet * plugin_variants(void) {
     return &gSet;
 }
+
+SYNTHLIB_PLUGIN_REGISTER(plugin_variants, "midisynctool")

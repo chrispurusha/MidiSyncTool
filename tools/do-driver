@@ -13,12 +13,12 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 for SRC in device ring; do
-    clang -c -O2 -std=gnu11 -Wall -Wextra -I "$HERE/../SynthLib/audio" \
-        -o "$WORK/$SRC.o" "$HERE/../SynthLib/audio/$SRC.c"
+    clang -c -O2 -std=gnu11 -Wall -Wextra -I "$HERE/../../SynthLib/audio" \
+        -o "$WORK/$SRC.o" "$HERE/../../SynthLib/audio/$SRC.c"
 done
 
 clang++ -O2 -std=gnu++17 -Wall -Wextra \
-    -I "$SDK" -I "$HERE/../src" -I "$HERE/../SynthLib/audio" \
+    -I "$SDK" -I "$HERE/../src" -I "$HERE/../../SynthLib/audio" \
     -o "$HERE/mstDriver" \
     "$HERE/mstDriver.cpp" \
     "$WORK/device.o" "$WORK/ring.o" \
