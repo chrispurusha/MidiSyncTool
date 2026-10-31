@@ -97,20 +97,16 @@ if (( ${FORMATS[(I)vst3]} )) && [[ ! -d "$SDK/pluginterfaces" ]]; then
     exit 1
 fi
 
-FREETYPE_LIB="$SL/ThirdParty/freetype/build/libfreetype.a"
+"$SL/do-build"
+SYNTHLIB_LIB="$SL/build/libSynthLib.a"
+FREETYPE_LIB="$SL/build/libfreetype.a"
 
-if [[ ! -f "$FREETYPE_LIB" ]]; then
-    print -u2 "error: freetype not built at $FREETYPE_LIB"
-    print -u2 "       see the build notes in G2-Edit/Docs/Third Party build notes.md"
-    exit 1
-fi
 
 # ------------------------------------------------------------------------------------------------
 # MidiSyncTool itself - compiled once, linked into every format
 # ------------------------------------------------------------------------------------------------
 
 SOURCES=(
-    "$SL/plugin/synthlibLog.c"      # the file-gated log, shared with the sibling plug-in
     "$HERE/src/msMidi.c"
     "$HERE/src/msClock.c"
     "$HERE/src/msClockIn.c"
@@ -120,58 +116,6 @@ SOURCES=(
     "$HERE/vst3/msStatus.c"
     "$HERE/vst3/msDraw.c"
     "$HERE/vst3/msPlugin.c"
-
-    # SHARED, from SynthLib but NOT SynthLib/src - see the header of SynthLib/audio/device.c for why
-    # that distinction matters.
-    "$SL/plugin/synthlibPluginRegistry.c"
-    "$SL/src/synthlibGlobals.c"
-    "$SL/plugin/synthlibPluginState.c"
-
-    # SynthLib, and only the parts a plug-in panel needs. MANUAL: nothing here is a synchronised
-    # folder, so a new SynthLib file that becomes necessary goes in by hand.
-    "$SL/src/utilsGraphics.c"
-    "$SL/src/renderBackend.c"
-    # COMPILES TO NOTHING ON macOS - renderBackendSelect.h leaves the GL backend out of every Apple
-    # build. Kept because it is the whole renderer for the Windows and Linux builds to come.
-    "$SL/src/renderBackendGL.c"
-    "$SL/src/geometry.c"
-    "$SL/src/utils.c"
-    "$SL/src/synthlibHost.c"
-    "$SL/src/synthlibVersion.c"
-    "$SL/src/clickRegion.c"
-    "$SL/src/inputState.c"
-    "$SL/src/contextMenu.c"
-)
-
-OBJC_SOURCES=(
-    "$SL/plugin/synthlibPanelView.m"   # the panel view, shared with the other sibling since 2026-09-11
-    "$SL/src/renderBackendMetal.m"
-)
-
-# ------------------------------------------------------------------------------------------------
-# FORMAT-SPECIFIC - all of it SynthLib's
-# ------------------------------------------------------------------------------------------------
-
-VST3_CXX_SOURCES=(
-    "$SL/plugin/synthlibPluginVst3.cpp"
-    "$SDK/pluginterfaces/base/funknown.cpp"
-    "$SDK/pluginterfaces/base/coreiids.cpp"
-    "$SDK/public.sdk/source/vst/vstinitiids.cpp"
-    "$SDK/public.sdk/source/common/commoniids.cpp"
-    "$SDK/pluginterfaces/base/ustring.cpp"
-    "$SDK/pluginterfaces/base/conststringtable.cpp"
-)
-
-VST3_OBJCXX_SOURCES=(
-    "$SL/plugin/synthlibPluginVst3View.mm"
-)
-
-AU_C_SOURCES=(
-    "$SL/plugin/synthlibPluginAu.c"
-)
-
-AU_OBJC_SOURCES=(
-    "$SL/plugin/synthlibPluginAuView.m"
 )
 
 # ------------------------------------------------------------------------------------------------
@@ -180,16 +124,12 @@ AU_OBJC_SOURCES=(
 
 WARNFLAGS=(-Wall -Wextra)
 
-# SYNTHLIB_PLUGIN_BUILD is SynthLib's "this is a plug-in, there is no GLFW" - G2_VST3_BUILD until the
-# plug-ins gained a second format. An ARRAY, so the version define keeps its own quotes.
-DEFS=(-DSYNTHLIB_PLUGIN_BUILD=1 -DMST_VERSION_STRING="\"$MST_VERSION\"" -DMST_AU_VERSION=$AU_VERSION)
+DEFS=(-DMST_VERSION_STRING="\"$MST_VERSION\"" -DMST_AU_VERSION=$AU_VERSION)
 
 # glfw for its HEADERS ONLY - SynthLib's key and mouse constants come from them. freetype is real: the
 # panel renders text through it, taken static so each bundle stays self-contained.
 INCLUDES=(-I"$HERE/src" -I"$HERE/vst3" -I"$SL/src" -I"$SL/audio" -I"$SL/plugin"
           -I"$SL/ThirdParty/glfw/include" -I"$SL/ThirdParty/freetype/include")
-
-VST3_INCLUDES=(-I"$SDK")
 
 ARCHS=(-arch arm64 -arch x86_64)
 MIN=-mmacosx-version-min=12.0
@@ -212,13 +152,6 @@ COMMON_OBJECTS=()
 for src in "${SOURCES[@]}"; do
     obj="$OBJDIR/$(basename "${src%.*}").o"
     clang $ARCHS $MIN -O2 -std=gnu11 "${WARNFLAGS[@]}" "${DEFS[@]}" "${INCLUDES[@]}" -c "$src" -o "$obj"
-    COMMON_OBJECTS+=("$obj")
-done
-
-for src in "${OBJC_SOURCES[@]}"; do
-    obj="$OBJDIR/$(basename "${src%.*}").om"
-    clang $ARCHS $MIN -O2 -std=gnu11 -fobjc-arc "${WARNFLAGS[@]}" "${DEFS[@]}" "${INCLUDES[@]}" \
-          -x objective-c -c "$src" -o "$obj"
     COMMON_OBJECTS+=("$obj")
 done
 
@@ -287,23 +220,9 @@ build_vst3() {
 
     print "==> VST3"
 
-    for src in "${VST3_CXX_SOURCES[@]}"; do
-        local obj="$OBJDIR/vst3_$(basename "${src%.*}").oxx"
-        clang++ $ARCHS $MIN -O2 -std=gnu++17 "${WARNFLAGS[@]}" "${DEFS[@]}" \
-                "${INCLUDES[@]}" "${VST3_INCLUDES[@]}" -c "$src" -o "$obj"
-        objects+=("$obj")
-    done
-
-    for src in "${VST3_OBJCXX_SOURCES[@]}"; do
-        local obj="$OBJDIR/vst3_$(basename "${src%.*}").omm"
-        clang++ $ARCHS $MIN -O2 -std=gnu++17 -fobjc-arc "${WARNFLAGS[@]}" "${DEFS[@]}" \
-                "${INCLUDES[@]}" "${VST3_INCLUDES[@]}" -x objective-c++ -c "$src" -o "$obj"
-        objects+=("$obj")
-    done
-
     rm -rf "$out"
     mkdir -p "$out/Contents/MacOS"
-    clang++ $ARCHS $MIN -bundle "${objects[@]}" "$FREETYPE_LIB" "${COMMON_LIBS[@]}" -o "$bin"
+    clang++ $ARCHS $MIN -bundle -Wl,-dead_strip -Wl,-S -Wl,-u,_GetPluginFactory "${objects[@]}" "$SYNTHLIB_LIB" "$FREETYPE_LIB" "${COMMON_LIBS[@]}" -o "$bin"
 
     cat > "$out/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -336,20 +255,6 @@ build_au() {
 
     print "==> Audio Unit"
 
-    for src in "${AU_C_SOURCES[@]}"; do
-        local obj="$OBJDIR/au_$(basename "${src%.*}").o"
-        clang $ARCHS $MIN -O2 -std=gnu11 "${WARNFLAGS[@]}" "${DEFS[@]}" "${INCLUDES[@]}" \
-              -c "$src" -o "$obj"
-        objects+=("$obj")
-    done
-
-    for src in "${AU_OBJC_SOURCES[@]}"; do
-        local obj="$OBJDIR/au_$(basename "${src%.*}").om"
-        clang $ARCHS $MIN -O2 -std=gnu11 -fobjc-arc "${WARNFLAGS[@]}" "${DEFS[@]}" "${INCLUDES[@]}" \
-              -x objective-c -c "$src" -o "$obj"
-        objects+=("$obj")
-    done
-
     # The one class that must be compiled into the product - see synthlibAuViewFactory.h
     local factory="$OBJDIR/auViewFactory.m"
     print "#import \"synthlibAuViewFactory.h\"\nSYNTHLIB_AU_VIEW_FACTORY($AU_VIEW_CLASS)" > "$factory"
@@ -359,7 +264,7 @@ build_au() {
 
     rm -rf "$out"
     mkdir -p "$out/Contents/MacOS"
-    clang++ $ARCHS $MIN -bundle "${objects[@]}" "$FREETYPE_LIB" \
+    clang++ $ARCHS $MIN -bundle -Wl,-dead_strip -Wl,-S -Wl,-u,_SynthLibAUFactory "${objects[@]}" "$SYNTHLIB_LIB" "$FREETYPE_LIB" \
             "${COMMON_LIBS[@]}" "${AU_LIBS[@]}" -o "$bin"
 
     # THE AudioComponents ARRAY IS HOW macOS FINDS AN AUDIO UNIT AT ALL - the component manager reads

@@ -7,9 +7,6 @@
 
 #include "msMidi.h"
 
-// Names the log - touch /tmp/midisynctool-log, read /tmp/midisynctool.log. See SynthLib's plugin/synthlibLog.h.
-const char gSynthLibLogName[] = "midisynctool";
-
 static int gFailures = 0;
 
 static void check(const char * what, int got, int expected) {
